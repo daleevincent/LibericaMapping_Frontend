@@ -34,11 +34,20 @@ class _TreeMapScreenState extends State<TreeMapScreen> {
   }
 
   Future<void> _loadTrees() async {
-    final trees = await _treeService.getTreesForFarm(widget.farm.id);
-    setState(() {
-      _trees = trees;
-      _isLoading = false;
-    });
+    try {
+      final trees = await _treeService.getTreesForFarm(widget.farm.id);
+      setState(() {
+        _trees = trees;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load trees: $e')),
+        );
+      }
+    }
   }
 
   List<CoffeeTree> get _filteredTrees {
@@ -60,7 +69,7 @@ class _TreeMapScreenState extends State<TreeMapScreen> {
             options: MapOptions(
               initialCenter: LatLng(farm.latitude, farm.longitude),
               initialZoom: AppConstants.treeZoom,
-              onTap: (_, _) => setState(() => _selectedTree = null),
+              onTap: (_, __) => setState(() => _selectedTree = null),
             ),
             children: [
               // Base tile layer (OpenStreetMap)
@@ -71,11 +80,11 @@ class _TreeMapScreenState extends State<TreeMapScreen> {
               ),
 
               // Farm polygon boundary
-              if (farm.polygonCoordinates.isNotEmpty)
+              if (farm.boundary.isNotEmpty)
                 PolygonLayer(
                   polygons: [
                     Polygon(
-                      points: farm.polygonCoordinates,
+                      points: farm.boundary,
                       color: AppTheme.polygonFill,
                       borderColor: AppTheme.polygonBorder,
                       borderStrokeWidth: 2.5,

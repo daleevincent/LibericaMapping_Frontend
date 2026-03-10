@@ -110,9 +110,9 @@ class FarmInfoCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 12),
                     _buildStat(
-                      'Field Size',
-                      '${farm.fieldSize} ha',
-                      Icons.crop_square_rounded,
+                      'Barangay',
+                      farm.barangayName,
+                      Icons.place_rounded,
                     ),
                   ],
                 ),

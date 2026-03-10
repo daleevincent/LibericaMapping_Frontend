@@ -38,18 +38,27 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
   }
 
   Future<void> _loadFarms() async {
-    final farms = await _farmService.getAllFarms();
-    setState(() {
-      _farms = farms;
-      _isLoading = false;
-    });
-    _buildMarkers();
+    try {
+      final farms = await _farmService.getAllFarms();
+      setState(() {
+        _farms = farms;
+        _isLoading = false;
+      });
+      _buildMarkers();
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load farms: $e')),
+        );
+      }
+    }
   }
 
   void _buildMarkers() {
     final markers = _farms.map((farm) {
       return Marker(
-        markerId: MarkerId(farm.id),
+        markerId: MarkerId(farm.id.toString()),
         position: LatLng(farm.latitude, farm.longitude),
         icon: BitmapDescriptor.defaultMarkerWithHue(
           BitmapDescriptor.hueGreen,
@@ -156,12 +165,12 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
                       color: AppTheme.primary,
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Row(
+                    child: const Row(
                       children: [
-                        const Icon(Icons.eco_rounded,
+                        Icon(Icons.eco_rounded,
                             color: Colors.white, size: 18),
-                        const SizedBox(width: 8),
-                        const Expanded(
+                        SizedBox(width: 8),
+                        Expanded(
                           child: Text(
                             'Geo-mapping of Coffee Liberica Farms – Batangas',
                             style: TextStyle(

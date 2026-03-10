@@ -1,10 +1,8 @@
-// lib/main.dart
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'screens/main_dashboard.dart';
 import 'screens/overview_screen.dart';
-import 'screens/farms_directory_screen.dart';
+import 'screens/plant_classification_screen.dart';
 import 'screens/admin_login_screen.dart';
 import 'utils/app_theme.dart';
 
@@ -46,7 +44,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final List<Widget> _screens = const [
     MainDashboardScreen(),
     OverviewScreen(),
-    FarmsDirectoryScreen(),
+    PlantClassificationScreen(),
     AdminLoginScreen(),
   ];
 
@@ -74,14 +72,10 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _buildNavItem(0, Icons.map_rounded, Icons.map_outlined, 'Mapping'),
-                _buildNavItem(1, Icons.bar_chart_rounded,
-                    Icons.bar_chart_outlined, 'Overview'),
-                _buildNavItem(2, Icons.list_alt_rounded,
-                    Icons.list_alt_outlined, 'Directory'),
-                _buildNavItem(
-                    3, Icons.admin_panel_settings_rounded,
-                    Icons.admin_panel_settings_outlined, 'Admin'),
+                _buildNavItem(0, Icons.map_rounded,             Icons.map_outlined,                    'Mapping'),
+                _buildNavItem(1, Icons.bar_chart_rounded,       Icons.bar_chart_outlined,              'Overview'),
+                _buildNavItem(2, Icons.biotech_rounded,         Icons.biotech_outlined,                'Classify'),
+                _buildNavItem(3, Icons.admin_panel_settings_rounded, Icons.admin_panel_settings_outlined, 'Admin'),
               ],
             ),
           ),
@@ -121,8 +115,7 @@ class _HomeScreenState extends State<HomeScreen> {
               label,
               style: TextStyle(
                 fontSize: 11,
-                fontWeight:
-                    isActive ? FontWeight.w600 : FontWeight.w400,
+                fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
                 color: isActive ? AppTheme.primary : AppTheme.textLight,
               ),
             ),

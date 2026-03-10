@@ -1,22 +1,60 @@
 // lib/screens/overview_screen.dart
 
 import 'package:flutter/material.dart';
+import '../models/farm.dart';
 import '../services/farm_service.dart';
 import '../utils/app_theme.dart';
 import '../widgets/stats_card.dart';
-import '../utils/mock_data.dart';
 
-class OverviewScreen extends StatelessWidget {
+class OverviewScreen extends StatefulWidget {
   const OverviewScreen({super.key});
 
   @override
+  State<OverviewScreen> createState() => _OverviewScreenState();
+}
+
+class _OverviewScreenState extends State<OverviewScreen> {
+  final FarmService _farmService = FarmService();
+  List<Farm> _farms = [];
+  Map<String, dynamic> _stats = {};
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final farms = await _farmService.getAllFarms();
+      setState(() {
+        _farms = farms;
+        _stats = _farmService.computeStats(farms);
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load stats: $e')),
+        );
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final stats = FarmService().getSummaryStats();
-    final farms = MockData.farms;
-    final totalTrees = stats['totalLibericaTrees'] as int;
-    final totalDna = stats['totalDnaVerifiedTrees'] as int;
-    final verificationRate =
-        totalTrees > 0 ? (totalDna / totalTrees * 100) : 0.0;
+    if (_isLoading) {
+      return const Scaffold(
+        backgroundColor: AppTheme.background,
+        body: Center(child: CircularProgressIndicator(color: AppTheme.primary)),
+      );
+    }
+
+    final totalTrees = _stats['totalLibericaTrees'] as int? ?? 0;
+    final totalDna   = _stats['totalDnaVerifiedTrees'] as int? ?? 0;
+    final verificationRate = totalTrees > 0 ? (totalDna / totalTrees * 100) : 0.0;
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -164,17 +202,17 @@ class OverviewScreen extends StatelessWidget {
                 children: [
                   StatsCard(
                     title: 'Total Farms',
-                    value: '${stats['totalFarms']}',
+                    value: '${_stats['totalFarms']}',
                     icon: Icons.location_on_rounded,
                     iconColor: AppTheme.accent,
                     subtitle: 'Across Batangas province',
                   ),
-                  StatsCard(
+                  const StatsCard(
                     title: 'Total Field Area',
-                    value: '${(stats['totalFieldSize'] as double).toStringAsFixed(1)} ha',
+                    value: 'N/A',
                     icon: Icons.crop_square_rounded,
                     iconColor: AppTheme.primaryLight,
-                    subtitle: 'Mapped farm area',
+                    subtitle: 'Not in current schema',
                   ),
                   StatsCard(
                     title: 'Liberica Trees',
@@ -195,20 +233,36 @@ class OverviewScreen extends StatelessWidget {
 
               const SizedBox(height: 24),
 
-              // Per-farm breakdown
-              const Text(
-                'Farm Breakdown',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: AppTheme.textPrimary,
-                ),
+              // Farm Directory
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Farm Directory',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                  Text(
+                    '${_farms.length} farms',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppTheme.textLight,
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 12),
-              ...farms.map((farm) {
+              ..._farms.map((farm) {
                 final rate = farm.libericaTrees > 0
                     ? (farm.dnaVerifiedTrees / farm.libericaTrees * 100)
                     : 0.0;
+                final rateColor = rate >= 70
+                    ? AppTheme.dnaVerifiedColor
+                    : AppTheme.accent;
+
                 return Container(
                   margin: const EdgeInsets.only(bottom: 12),
                   padding: const EdgeInsets.all(16),
@@ -225,71 +279,119 @@ class OverviewScreen extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // Farm name + DNA rate badge
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primary.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.eco_rounded,
+                                color: AppTheme.primary, size: 18),
+                          ),
+                          const SizedBox(width: 12),
                           Expanded(
-                            child: Text(
-                              farm.name,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                                fontSize: 14,
-                                color: AppTheme.textPrimary,
-                              ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  farm.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 14,
+                                    color: AppTheme.textPrimary,
+                                  ),
+                                ),
+                                Text(
+                                  '${farm.barangayName}, ${farm.cityName}',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: AppTheme.textLight,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          Text(
-                            '${rate.toStringAsFixed(0)}%',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14,
-                              color: rate >= 70
-                                  ? AppTheme.dnaVerifiedColor
-                                  : AppTheme.accent,
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: rateColor.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              '${rate.toStringAsFixed(0)}% DNA',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: rateColor,
+                              ),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        farm.location,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: AppTheme.textLight,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
+
+                      const SizedBox(height: 12),
+
+                      // Progress bar
                       ClipRRect(
                         borderRadius: BorderRadius.circular(4),
                         child: LinearProgressIndicator(
                           value: rate / 100,
                           backgroundColor: Colors.grey.shade100,
-                          valueColor: AlwaysStoppedAnimation(
-                            rate >= 70
-                                ? AppTheme.dnaVerifiedColor
-                                : AppTheme.accent,
-                          ),
+                          valueColor: AlwaysStoppedAnimation(rateColor),
                           minHeight: 6,
                         ),
                       ),
-                      const SizedBox(height: 8),
+
+                      const SizedBox(height: 10),
+
+                      // Stats row
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text(
-                            '${farm.dnaVerifiedTrees} / ${farm.libericaTrees} trees DNA verified',
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: AppTheme.textSecondary,
-                            ),
+                          _buildFarmStat(
+                            Icons.park_rounded,
+                            '${farm.libericaTrees}',
+                            'Trees',
+                            AppTheme.nonVerifiedColor,
                           ),
-                          Text(
-                            '${farm.fieldSize} ha',
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: AppTheme.textLight,
-                            ),
+                          const SizedBox(width: 16),
+                          _buildFarmStat(
+                            Icons.biotech_rounded,
+                            '${farm.dnaVerifiedTrees}',
+                            'Verified',
+                            AppTheme.dnaVerifiedColor,
                           ),
+                          const Spacer(),
+                          if (farm.hasDnaVerified)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: AppTheme.dnaVerifiedColor
+                                    .withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.verified_rounded,
+                                      size: 11,
+                                      color: AppTheme.dnaVerifiedColor),
+                                  SizedBox(width: 3),
+                                  Text(
+                                    'Has DNA',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppTheme.dnaVerifiedColor,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                         ],
                       ),
                     ],
@@ -302,6 +404,29 @@ class OverviewScreen extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildFarmStat(IconData icon, String value, String label, Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 13, color: color),
+        const SizedBox(width: 4),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: color,
+          ),
+        ),
+        const SizedBox(width: 3),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 11, color: AppTheme.textLight),
+        ),
+      ],
     );
   }
 }

@@ -1,58 +1,121 @@
 // lib/services/farm_service.dart
 
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import '../models/farm.dart';
-import '../utils/mock_data.dart';
+import 'api_config.dart';
 
 class FarmService {
-  // In a real app, replace with actual API calls
+  // ── GET all farms ────────────────────────────────────────────────────────
   Future<List<Farm>> getAllFarms() async {
-    await Future.delayed(const Duration(milliseconds: 300));
-    return MockData.farms;
-  }
-
-  Future<Farm?> getFarmById(String id) async {
-    await Future.delayed(const Duration(milliseconds: 100));
     try {
-      return MockData.farms.firstWhere((f) => f.id == id);
-    } catch (_) {
-      return null;
+      final uri = Uri.parse(ApiConfig.farms);
+      print('[FarmService] GET $uri');
+
+      final response = await http
+          .get(uri)
+          .timeout(ApiConfig.timeout);
+
+      print('[FarmService] Status: ${response.statusCode}');
+      print('[FarmService] Body preview: ${response.body.substring(0, response.body.length.clamp(0, 300))}');
+
+      if (response.statusCode == 200) {
+        final List<dynamic> data = jsonDecode(response.body);
+
+        // Filter only real farm documents — must have 'name' and 'coordinates'
+        // Some farms may not have a numeric 'id' field
+        // Prediction records only have 'prediction', 'confidence_ratio', 'plant_part_mode'
+        final farmDocs = data.where((doc) =>
+            doc is Map<String, dynamic> &&
+            doc.containsKey('name') &&
+            doc.containsKey('coordinates')).toList();
+
+        print('[FarmService] Found ${farmDocs.length} farm docs out of ${data.length} total');
+
+        final farms = <Farm>[];
+        for (final doc in farmDocs) {
+          try {
+            farms.add(Farm.fromJson(doc as Map<String, dynamic>));
+          } catch (e) {
+            print('[FarmService] Skipped doc due to parse error: $e');
+            print('[FarmService] Doc: $doc');
+          }
+        }
+
+        print('[FarmService] Successfully parsed ${farms.length} farms');
+        return farms;
+      }
+      throw Exception('Failed to load farms: ${response.statusCode}');
+    } catch (e) {
+      print('[FarmService] ERROR: $e');
+      throw Exception('Network error: $e');
     }
   }
 
-  Future<List<Farm>> searchFarms(String query) async {
-    final q = query.toLowerCase();
-    return MockData.farms
-        .where((f) =>
-            f.name.toLowerCase().contains(q) ||
-            f.location.toLowerCase().contains(q))
-        .toList();
-  }
+  // ── GET single farm by numeric id ────────────────────────────────────────
+  Future<Farm?> getFarmById(int id) async {
+    try {
+      final response = await http
+          .get(Uri.parse(ApiConfig.farmById(id)))
+          .timeout(ApiConfig.timeout);
 
-  Future<bool> addFarm(Farm farm) async {
-    await Future.delayed(const Duration(milliseconds: 200));
-    MockData.farms.add(farm);
-    return true;
-  }
-
-  Future<bool> updateFarm(Farm updatedFarm) async {
-    await Future.delayed(const Duration(milliseconds: 200));
-    final index = MockData.farms.indexWhere((f) => f.id == updatedFarm.id);
-    if (index != -1) {
-      MockData.farms[index] = updatedFarm;
-      return true;
+      if (response.statusCode == 200) {
+        return Farm.fromJson(jsonDecode(response.body));
+      }
+      if (response.statusCode == 404) return null;
+      throw Exception('Failed to load farm: ${response.statusCode}');
+    } catch (e) {
+      throw Exception('Network error: $e');
     }
-    return false;
   }
 
-  Map<String, dynamic> getSummaryStats() {
-    final farms = MockData.farms;
+  // ── POST create new farm ─────────────────────────────────────────────────
+  Future<Farm> addFarm(Farm farm) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse(ApiConfig.farms),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(farm.toJson()),
+          )
+          .timeout(ApiConfig.timeout);
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        return Farm.fromJson(jsonDecode(response.body));
+      }
+      throw Exception('Failed to create farm: ${response.statusCode}');
+    } catch (e) {
+      throw Exception('Network error: $e');
+    }
+  }
+
+  // ── PUT update existing farm ─────────────────────────────────────────────
+  Future<Farm> updateFarm(Farm farm) async {
+    try {
+      final response = await http
+          .put(
+            Uri.parse(ApiConfig.farmById(farm.id)),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(farm.toJson()),
+          )
+          .timeout(ApiConfig.timeout);
+
+      if (response.statusCode == 200) {
+        return Farm.fromJson(jsonDecode(response.body));
+      }
+      throw Exception('Failed to update farm: ${response.statusCode}');
+    } catch (e) {
+      throw Exception('Network error: $e');
+    }
+  }
+
+  // ── Summary stats (computed client-side from fetched data) ───────────────
+  Map<String, dynamic> computeStats(List<Farm> farms) {
     return {
-      'totalFarms': farms.length,
-      'totalLibericaTrees': farms.fold<int>(0, (sum, f) => sum + f.libericaTrees),
-      'totalDnaVerifiedTrees':
-          farms.fold<int>(0, (sum, f) => sum + f.dnaVerifiedTrees),
-      'totalFieldSize':
-          farms.fold<double>(0, (sum, f) => sum + f.fieldSize),
+      'totalFarms':           farms.length,
+      'totalLibericaTrees':   farms.fold<int>(0, (s, f) => s + f.totalTrees),
+      'totalDnaVerifiedTrees':farms.fold<int>(0, (s, f) => s + f.dnaVerifiedCount),
+      'totalFieldSize':       0.0, // fieldSize not in current schema — add if needed
     };
   }
 }

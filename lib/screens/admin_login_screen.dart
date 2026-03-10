@@ -3,7 +3,9 @@
 import 'package:flutter/material.dart';
 import '../utils/app_theme.dart';
 import '../models/farm.dart';
-import '../utils/mock_data.dart';
+import '../services/farm_service.dart';
+import 'edit_farm_screen.dart';
+import 'add_farm_screen.dart';
 
 class AdminLoginScreen extends StatefulWidget {
   const AdminLoginScreen({super.key});
@@ -15,9 +17,12 @@ class AdminLoginScreen extends StatefulWidget {
 class _AdminLoginScreenState extends State<AdminLoginScreen> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
+  final FarmService _farmService = FarmService();
   bool _isLoggedIn = false;
   bool _obscurePassword = true;
+  bool _isLoadingFarms = false;
   String? _errorMessage;
+  List<Farm> _farms = [];
 
   void _login() {
     if (_usernameController.text == AppConstants.adminUsername &&
@@ -26,10 +31,29 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
         _isLoggedIn = true;
         _errorMessage = null;
       });
+      _loadFarms();
     } else {
       setState(() {
         _errorMessage = 'Invalid username or password.';
       });
+    }
+  }
+
+  Future<void> _loadFarms() async {
+    setState(() => _isLoadingFarms = true);
+    try {
+      final farms = await _farmService.getAllFarms();
+      setState(() {
+        _farms = farms;
+        _isLoadingFarms = false;
+      });
+    } catch (e) {
+      setState(() => _isLoadingFarms = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load farms: $e')),
+        );
+      }
     }
   }
 
@@ -191,7 +215,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
 
                   const SizedBox(height: 16),
                   const Text(
-                    'Demo credentials: admin / liberica2024',
+                    '',
                     style: TextStyle(
                       fontSize: 12,
                       color: AppTheme.textLight,
@@ -348,9 +372,12 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  ...MockData.farms.map(
-                    (farm) => _buildFarmEditTile(farm),
-                  ),
+                  if (_isLoadingFarms)
+                    const Center(child: CircularProgressIndicator(color: AppTheme.primary))
+                  else
+                    ..._farms.map(
+                      (farm) => _buildFarmEditTile(farm),
+                    ),
                 ],
               ),
             ),
@@ -430,7 +457,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
             ),
           ),
           GestureDetector(
-            onTap: () => _showEditFarmDialog(farm),
+            onTap: () => _openEditFarm(farm),
             child: Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
@@ -447,86 +474,19 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   }
 
   void _showAddFarmDialog() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Add New Farm'),
-        content: const Text(
-            'In production, this form would allow you to add a new farm with all required details including name, location, coordinates, and tree counts.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context),
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primary,
-                foregroundColor: Colors.white),
-            child: const Text('Add Farm'),
-          ),
-        ],
-      ),
-    );
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const AddFarmScreen()),
+    ).then((added) {
+      if (added == true) _loadFarms(); // refresh list after adding
+    });
   }
 
-  void _showEditFarmDialog(Farm farm) {
-    final libericaCtrl =
-        TextEditingController(text: farm.libericaTrees.toString());
-    final dnaCtrl =
-        TextEditingController(text: farm.dnaVerifiedTrees.toString());
-
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text('Edit: ${farm.name}'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: libericaCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Number of Liberica Trees',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: dnaCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'DNA Verified Trees',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Farm updated successfully!'),
-                  backgroundColor: AppTheme.primary,
-                ),
-              );
-              Navigator.pop(context);
-            },
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primary,
-                foregroundColor: Colors.white),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
+  void _openEditFarm(Farm farm) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => EditFarmScreen(farm: farm)),
+    ).then((_) => _loadFarms()); // refresh list when returning
   }
 
   void _showExportDialog() {

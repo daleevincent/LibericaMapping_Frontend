@@ -29,12 +29,21 @@ class _FarmsDirectoryScreenState extends State<FarmsDirectoryScreen> {
   }
 
   Future<void> _loadFarms() async {
-    final farms = await _farmService.getAllFarms();
-    setState(() {
-      _farms = farms;
-      _filteredFarms = farms;
-      _isLoading = false;
-    });
+    try {
+      final farms = await _farmService.getAllFarms();
+      setState(() {
+        _farms = farms;
+        _filteredFarms = farms;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load farms: $e')),
+        );
+      }
+    }
   }
 
   void _filterFarms(String query) {
@@ -62,7 +71,7 @@ class _FarmsDirectoryScreenState extends State<FarmsDirectoryScreen> {
               (a, b) => b.dnaVerifiedTrees.compareTo(a.dnaVerifiedTrees));
           break;
         case 'size':
-          _filteredFarms.sort((a, b) => b.fieldSize.compareTo(a.fieldSize));
+          _filteredFarms.sort((a, b) => b.totalTrees.compareTo(a.totalTrees));
           break;
       }
     });
@@ -166,7 +175,6 @@ class _FarmsDirectoryScreenState extends State<FarmsDirectoryScreen> {
                     ('name', 'Name'),
                     ('trees', 'Trees'),
                     ('verified', 'Verified'),
-                    ('size', 'Size'),
                   ].map(
                     (s) => GestureDetector(
                       onTap: () {
@@ -336,7 +344,7 @@ class _FarmsDirectoryScreenState extends State<FarmsDirectoryScreen> {
             child: Row(
               children: [
                 _buildMiniStat(
-                    '${farm.fieldSize} ha', 'Field Size', AppTheme.accent),
+                    farm.barangayName, 'Barangay', AppTheme.accent),
                 _buildDivider(),
                 _buildMiniStat('${farm.libericaTrees}', 'Liberica Trees',
                     AppTheme.nonVerifiedColor),
