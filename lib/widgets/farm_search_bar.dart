@@ -8,12 +8,14 @@ class FarmSearchBar extends StatefulWidget {
   final List<Farm> farms;
   final Farm? selectedFarm;
   final ValueChanged<Farm?> onFarmSelected;
+  final ValueChanged<bool>? onDropdownToggle; // true = opened, false = closed
 
   const FarmSearchBar({
     super.key,
     required this.farms,
     this.selectedFarm,
     required this.onFarmSelected,
+    this.onDropdownToggle,
   });
 
   @override
@@ -36,16 +38,35 @@ class _FarmSearchBarState extends State<FarmSearchBar> {
     }
   }
 
+  @override
+  void didUpdateWidget(FarmSearchBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Sync search bar text when selectedFarm changes externally (e.g. pin tap)
+    if (widget.selectedFarm != oldWidget.selectedFarm) {
+      if (widget.selectedFarm != null) {
+        _controller.text = widget.selectedFarm!.name;
+      } else {
+        _controller.clear();
+      }
+    }
+    // Refresh farm list if farms changed
+    if (widget.farms != oldWidget.farms) {
+      _filteredFarms = widget.farms;
+    }
+  }
+
   void _openDropdown() {
     _overlayEntry = _createOverlay();
     Overlay.of(context).insert(_overlayEntry!);
     setState(() => _isOpen = true);
+    widget.onDropdownToggle?.call(true);
   }
 
   void _closeDropdown() {
     _overlayEntry?.remove();
     _overlayEntry = null;
     setState(() => _isOpen = false);
+    widget.onDropdownToggle?.call(false);
   }
 
   void _filterFarms(String query) {
@@ -176,6 +197,7 @@ class _FarmSearchBarState extends State<FarmSearchBar> {
                   _controller.clear();
                   widget.onFarmSelected(null);
                   _filterFarms('');
+                  if (_isOpen) _closeDropdown();
                 },
                 child: const Padding(
                   padding: EdgeInsets.all(12),

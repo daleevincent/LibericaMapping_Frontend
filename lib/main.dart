@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'screens/main_dashboard.dart';
 import 'screens/overview_screen.dart';
 import 'screens/plant_classification_screen.dart';
-import 'screens/admin_login_screen.dart';
 import 'utils/app_theme.dart';
 
 void main() {
@@ -45,7 +44,6 @@ class _HomeScreenState extends State<HomeScreen> {
     MainDashboardScreen(),
     OverviewScreen(),
     PlantClassificationScreen(),
-    AdminLoginScreen(),
   ];
 
   @override
@@ -72,10 +70,9 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _buildNavItem(0, Icons.map_rounded,             Icons.map_outlined,                    'Mapping'),
-                _buildNavItem(1, Icons.bar_chart_rounded,       Icons.bar_chart_outlined,              'Overview'),
-                _buildNavItem(2, Icons.biotech_rounded,         Icons.biotech_outlined,                'Classify'),
-                _buildNavItem(3, Icons.admin_panel_settings_rounded, Icons.admin_panel_settings_outlined, 'Admin'),
+                _buildNavItem(0, Icons.map_rounded,             Icons.map_outlined,       'Mapping'),
+                _buildNavItem(1, Icons.bar_chart_rounded,       Icons.bar_chart_outlined, 'Overview'),
+                _buildNavItem(2, Icons.biotech_rounded,         Icons.biotech_outlined,   'Classify'),
               ],
             ),
           ),

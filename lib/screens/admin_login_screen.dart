@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import '../utils/app_theme.dart';
 import '../models/farm.dart';
 import '../services/farm_service.dart';
-import 'edit_farm_screen.dart';
 import 'add_farm_screen.dart';
+import 'manage_farm_screen.dart';
 
 class AdminLoginScreen extends StatefulWidget {
   const AdminLoginScreen({super.key});
@@ -80,7 +80,30 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            const SizedBox(height: 40),
+            // Back button
+            Align(
+              alignment: Alignment.centerLeft,
+              child: GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(10),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.08),
+                        blurRadius: 8,
+                      ),
+                    ],
+                  ),
+                  child: const Icon(Icons.arrow_back_rounded,
+                      color: AppTheme.textPrimary, size: 20),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 32),
 
             // Logo
             Container(
@@ -190,6 +213,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
 
                   const SizedBox(height: 24),
 
+                  // Login button
                   SizedBox(
                     width: double.infinity,
                     height: 52,
@@ -213,9 +237,34 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                     ),
                   ),
 
+                  const SizedBox(height: 12),
+
+                  // Cancel button
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.textSecondary,
+                        side: BorderSide(color: Colors.grey.shade300),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      child: const Text(
+                        'Cancel',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+
                   const SizedBox(height: 16),
                   const Text(
-                    '',
+                    'Demo credentials: admin / liberica2024',
                     style: TextStyle(
                       fontSize: 12,
                       color: AppTheme.textLight,
@@ -351,10 +400,10 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: _buildActionButton(
-                          'Export Data',
-                          Icons.download_rounded,
+                          'Manage Farm',
+                          Icons.edit_location_alt_rounded,
                           AppTheme.dnaVerifiedColor,
-                          () => _showExportDialog(),
+                          () => _openManageFarm(),
                         ),
                       ),
                     ],
@@ -362,9 +411,9 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
 
                   const SizedBox(height: 24),
 
-                  // Farm list to edit
+                  // Farm breakdown list (read-only)
                   const Text(
-                    'Manage Farms',
+                    'Farm Breakdown',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w700,
@@ -373,11 +422,11 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                   ),
                   const SizedBox(height: 12),
                   if (_isLoadingFarms)
-                    const Center(child: CircularProgressIndicator(color: AppTheme.primary))
+                    const Center(
+                        child: CircularProgressIndicator(
+                            color: AppTheme.primary))
                   else
-                    ..._farms.map(
-                      (farm) => _buildFarmEditTile(farm),
-                    ),
+                    ..._farms.map((farm) => _buildFarmBreakdownTile(farm)),
                 ],
               ),
             ),
@@ -416,7 +465,8 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     );
   }
 
-  Widget _buildFarmEditTile(Farm farm) {
+  Widget _buildFarmBreakdownTile(Farm farm) {
+    final rate = farm.dnaVerificationRate;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(16),
@@ -430,43 +480,89 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.eco_rounded, color: AppTheme.primary, size: 24),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  farm.name,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                    color: AppTheme.textPrimary,
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.eco_rounded,
+                    color: AppTheme.primary, size: 18),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(farm.name,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                            color: AppTheme.textPrimary)),
+                    Text(farm.location,
+                        style: const TextStyle(
+                            fontSize: 11, color: AppTheme.textLight)),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: rate >= 50
+                      ? AppTheme.dnaVerifiedColor.withValues(alpha: 0.1)
+                      : Colors.orange.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '${rate.toStringAsFixed(0)}% DNA',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: rate >= 50
+                        ? AppTheme.dnaVerifiedColor
+                        : Colors.orange.shade700,
                   ),
                 ),
-                Text(
-                  '${farm.libericaTrees} trees • ${farm.dnaVerifiedTrees} verified',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppTheme.textLight,
-                  ),
-                ),
-              ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: rate / 100,
+              backgroundColor: Colors.grey.shade100,
+              valueColor: AlwaysStoppedAnimation<Color>(
+                rate >= 50
+                    ? AppTheme.dnaVerifiedColor
+                    : Colors.orange.shade400,
+              ),
+              minHeight: 5,
             ),
           ),
-          GestureDetector(
-            onTap: () => _openEditFarm(farm),
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: AppTheme.primary.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(Icons.edit_rounded,
-                  color: AppTheme.primary, size: 18),
-            ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Icon(Icons.park_rounded,
+                  size: 13, color: AppTheme.textLight),
+              const SizedBox(width: 4),
+              Text('${farm.totalTrees} trees',
+                  style: const TextStyle(
+                      fontSize: 11, color: AppTheme.textSecondary)),
+              const SizedBox(width: 12),
+              const Icon(Icons.verified_rounded,
+                  size: 13, color: AppTheme.dnaVerifiedColor),
+              const SizedBox(width: 4),
+              Text('${farm.dnaVerifiedCount} verified',
+                  style: const TextStyle(
+                      fontSize: 11, color: AppTheme.textSecondary)),
+            ],
           ),
         ],
       ),
@@ -478,33 +574,18 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       context,
       MaterialPageRoute(builder: (_) => const AddFarmScreen()),
     ).then((added) {
-      if (added == true) _loadFarms(); // refresh list after adding
+      if (added == true) _loadFarms();
     });
   }
 
-  void _openEditFarm(Farm farm) {
+  void _openManageFarm() {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => EditFarmScreen(farm: farm)),
-    ).then((_) => _loadFarms()); // refresh list when returning
-  }
-
-  void _showExportDialog() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Export Data'),
-        content:
-            const Text('Export options: CSV, Excel, GeoJSON (in production)'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
+      MaterialPageRoute(
+          builder: (_) => ManageFarmScreen(farms: _farms)),
+    ).then((saved) {
+      if (saved == true) _loadFarms();
+    });
   }
 }
 

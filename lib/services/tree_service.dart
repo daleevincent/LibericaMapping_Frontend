@@ -23,6 +23,10 @@ class TreeService {
     }
   }
 
+  // Alias used by ManageFarmScreen
+  Future<List<CoffeeTree>> getTreesByFarm(int farmId) =>
+      getTreesForFarm(farmId);
+
   // ── Filtered helpers ─────────────────────────────────────────────────────
   Future<List<CoffeeTree>> getDnaVerifiedTrees(int farmId) async {
     final trees = await getTreesForFarm(farmId);

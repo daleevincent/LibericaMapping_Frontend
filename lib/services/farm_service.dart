@@ -70,20 +70,32 @@ class FarmService {
   }
 
   // ── POST create new farm ─────────────────────────────────────────────────
-  Future<Farm> addFarm(Farm farm) async {
+  Future<void> addFarm(Farm farm) async {
     try {
+      // Remove _id from payload — MongoDB generates it automatically
+      final json = farm.toJson();
+      json.remove('_id');
+
+      final body = jsonEncode(json);
+      print('[FarmService] POST ${ApiConfig.farms}');
+      print('[FarmService] Body: $body');
+
       final response = await http
           .post(
             Uri.parse(ApiConfig.farms),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(farm.toJson()),
+            body: body,
           )
           .timeout(ApiConfig.timeout);
 
-      if (response.statusCode == 201 || response.statusCode == 200) {
-        return Farm.fromJson(jsonDecode(response.body));
-      }
-      throw Exception('Failed to create farm: ${response.statusCode}');
+      print('[FarmService] addFarm status: ${response.statusCode}');
+      print('[FarmService] addFarm response: ${response.body}');
+
+      // Flask returns {"message": "Farm created"} — just check status
+      if (response.statusCode == 200 || response.statusCode == 201) return;
+
+      throw Exception(
+          'Failed to create farm: ${response.statusCode} — ${response.body}');
     } catch (e) {
       throw Exception('Network error: $e');
     }

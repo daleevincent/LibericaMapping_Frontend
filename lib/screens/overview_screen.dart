@@ -129,7 +129,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      '☕ DNA Verification Progress',
+                      'DNA Verification Progress',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 16,

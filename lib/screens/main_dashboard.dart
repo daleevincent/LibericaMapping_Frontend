@@ -8,6 +8,7 @@ import '../utils/app_theme.dart';
 import '../widgets/farm_search_bar.dart';
 import '../widgets/farm_marker.dart';
 import 'tree_map_screen.dart' hide AppConstants;
+import 'admin_login_screen.dart' hide AppConstants;
 
 class MainDashboardScreen extends StatefulWidget {
   const MainDashboardScreen({super.key});
@@ -25,6 +26,7 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
   Set<Marker> _markers = {};
   bool _isLoading = true;
   bool _showFarmCard = false;
+  bool _mapScrollDisabled = false; // true when dropdown open or farm card shown
 
   static const CameraPosition _batangasCenter = CameraPosition(
     target: LatLng(AppConstants.batangasCenterLat, AppConstants.batangasCenterLng),
@@ -63,10 +65,6 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
         icon: BitmapDescriptor.defaultMarkerWithHue(
           BitmapDescriptor.hueGreen,
         ),
-        infoWindow: InfoWindow(
-          title: farm.name,
-          snippet: '${farm.libericaTrees} trees | ${farm.dnaVerifiedTrees} DNA verified',
-        ),
         onTap: () => _onFarmTapped(farm),
       );
     }).toSet();
@@ -78,6 +76,7 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
     setState(() {
       _selectedFarm = farm;
       _showFarmCard = true;
+      _mapScrollDisabled = true;
     });
     _mapController?.animateCamera(
       CameraUpdate.newCameraPosition(
@@ -94,6 +93,7 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
       setState(() {
         _selectedFarm = null;
         _showFarmCard = false;
+        _mapScrollDisabled = false;
       });
       _mapController?.animateCamera(
         CameraUpdate.newCameraPosition(_batangasCenter),
@@ -101,6 +101,10 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
     } else {
       _onFarmTapped(farm);
     }
+  }
+
+  void _onDropdownToggle(bool isOpen) {
+    setState(() => _mapScrollDisabled = isOpen || _showFarmCard);
   }
 
   void _viewTreeMap(Farm farm) {
@@ -125,9 +129,16 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,
             mapToolbarEnabled: false,
+            scrollGesturesEnabled: !_mapScrollDisabled,
+            zoomGesturesEnabled: !_mapScrollDisabled,
+            rotateGesturesEnabled: !_mapScrollDisabled,
+            tiltGesturesEnabled: !_mapScrollDisabled,
             onTap: (_) {
               if (_showFarmCard) {
-                setState(() => _showFarmCard = false);
+                setState(() {
+                  _showFarmCard = false;
+                  _mapScrollDisabled = false;
+                });
               }
             },
           ),
@@ -151,32 +162,52 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
               ),
             ),
 
-          // Top Search Bar
+          // Top header + search bar
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: Column(
                 children: [
-                  // App Title strip
+                  // Header row
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 8),
+                        horizontal: 16, vertical: 10),
                     decoration: BoxDecoration(
                       color: AppTheme.primary,
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(14),
                     ),
-                    child: const Row(
+                    child: Row(
                       children: [
-                        Icon(Icons.eco_rounded,
+                        const Icon(Icons.eco_rounded,
                             color: Colors.white, size: 18),
-                        SizedBox(width: 8),
-                        Expanded(
+                        const SizedBox(width: 10),
+                        const Expanded(
                           child: Text(
                             'Geo-mapping of Coffee Liberica Farms – Batangas',
                             style: TextStyle(
                               color: Colors.white,
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const AdminLoginScreen()),
+                          ),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(
+                              Icons.admin_panel_settings_rounded,
+                              color: Colors.white,
+                              size: 18,
                             ),
                           ),
                         ),
@@ -190,13 +221,14 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
                     farms: _farms,
                     selectedFarm: _selectedFarm,
                     onFarmSelected: _onFarmSelected,
+                    onDropdownToggle: _onDropdownToggle,
                   ),
                 ],
               ),
             ),
           ),
 
-          // Farm Count Badge
+          // Map controls (top right)
           Positioned(
             top: 130,
             right: 16,
@@ -237,39 +269,10 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
                   child: FarmInfoCard(
                     farm: _selectedFarm!,
                     onViewTrees: () => _viewTreeMap(_selectedFarm!),
-                    onClose: () => setState(() => _showFarmCard = false),
-                  ),
-                ),
-              ),
-            ),
-
-          // Farm count indicator
-          if (!_showFarmCard)
-            Positioned(
-              bottom: 16,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.1),
-                        blurRadius: 8,
-                      ),
-                    ],
-                  ),
-                  child: Text(
-                    '${_farms.length} farms in Batangas • Tap a pin to explore',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppTheme.textSecondary,
-                      fontWeight: FontWeight.w500,
-                    ),
+                    onClose: () => setState(() {
+                      _showFarmCard = false;
+                      _mapScrollDisabled = false;
+                    }),
                   ),
                 ),
               ),

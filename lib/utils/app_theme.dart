@@ -66,7 +66,7 @@ class AppConstants {
   static const double treeZoom = 17.0;
 
   // Google Maps API Key - Replace with your actual key
-  static const String googleMapsApiKey = 'YOUR_GOOGLE_MAPS_API_KEY_HERE';
+  static const String googleMapsApiKey = 'AIzaSyBWakBbd4nA5a7Opq1Ccyo6h6vlzWL0BQk';
 
   // Admin credentials (mock - replace with real auth in production)
   static const String adminUsername = 'admin';
