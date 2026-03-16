@@ -329,7 +329,7 @@ class _ManageFarmScreenState extends State<ManageFarmScreen> {
 
   Widget _buildFarmDropdown() {
     return DropdownButtonFormField<Farm>(
-      value: _selectedFarm,
+      initialValue: _selectedFarm,
       isExpanded: true,
       decoration: InputDecoration(
         labelText: 'Choose Farm to Manage',

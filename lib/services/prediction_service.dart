@@ -48,7 +48,19 @@ class PredictionService {
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
-        return Prediction.fromPredictResponse(json);
+        final prediction = Prediction.fromPredictResponse(json);
+        // Re-attach the coordinates the user entered — the backend response
+        // does not echo them back, so we inject them here.
+        return Prediction(
+          mongoId:               prediction.mongoId,
+          finalPrediction:       prediction.finalPrediction,
+          plantPartMode:         prediction.plantPartMode,
+          confidenceRatio:       prediction.confidenceRatio,
+          gradCamImage:          prediction.gradCamImage,
+          individualPredictions: prediction.individualPredictions,
+          latitude:              latitude,
+          longitude:             longitude,
+        );
       }
       throw Exception(
           'Prediction failed [${response.statusCode}]: ${response.body}');

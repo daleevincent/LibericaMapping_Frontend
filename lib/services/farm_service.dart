@@ -9,45 +9,32 @@ class FarmService {
   // ── GET all farms ────────────────────────────────────────────────────────
   Future<List<Farm>> getAllFarms() async {
     try {
-      final uri = Uri.parse(ApiConfig.farms);
-      print('[FarmService] GET $uri');
-
       final response = await http
-          .get(uri)
+          .get(Uri.parse(ApiConfig.farms))
           .timeout(ApiConfig.timeout);
-
-      print('[FarmService] Status: ${response.statusCode}');
-      print('[FarmService] Body preview: ${response.body.substring(0, response.body.length.clamp(0, 300))}');
 
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
 
         // Filter only real farm documents — must have 'name' and 'coordinates'
-        // Some farms may not have a numeric 'id' field
-        // Prediction records only have 'prediction', 'confidence_ratio', 'plant_part_mode'
+        // Prediction records only have 'prediction', 'confidence_ratio', etc.
         final farmDocs = data.where((doc) =>
             doc is Map<String, dynamic> &&
             doc.containsKey('name') &&
             doc.containsKey('coordinates')).toList();
 
-        print('[FarmService] Found ${farmDocs.length} farm docs out of ${data.length} total');
-
         final farms = <Farm>[];
         for (final doc in farmDocs) {
           try {
             farms.add(Farm.fromJson(doc as Map<String, dynamic>));
-          } catch (e) {
-            print('[FarmService] Skipped doc due to parse error: $e');
-            print('[FarmService] Doc: $doc');
+          } catch (_) {
+            // Skip malformed documents silently
           }
         }
-
-        print('[FarmService] Successfully parsed ${farms.length} farms');
         return farms;
       }
       throw Exception('Failed to load farms: ${response.statusCode}');
     } catch (e) {
-      print('[FarmService] ERROR: $e');
       throw Exception('Network error: $e');
     }
   }
@@ -76,20 +63,13 @@ class FarmService {
       final json = farm.toJson();
       json.remove('_id');
 
-      final body = jsonEncode(json);
-      print('[FarmService] POST ${ApiConfig.farms}');
-      print('[FarmService] Body: $body');
-
       final response = await http
           .post(
             Uri.parse(ApiConfig.farms),
             headers: {'Content-Type': 'application/json'},
-            body: body,
+            body: jsonEncode(json),
           )
           .timeout(ApiConfig.timeout);
-
-      print('[FarmService] addFarm status: ${response.statusCode}');
-      print('[FarmService] addFarm response: ${response.body}');
 
       // Flask returns {"message": "Farm created"} — just check status
       if (response.statusCode == 200 || response.statusCode == 201) return;
@@ -124,10 +104,9 @@ class FarmService {
   // ── Summary stats (computed client-side from fetched data) ───────────────
   Map<String, dynamic> computeStats(List<Farm> farms) {
     return {
-      'totalFarms':           farms.length,
-      'totalLibericaTrees':   farms.fold<int>(0, (s, f) => s + f.totalTrees),
-      'totalDnaVerifiedTrees':farms.fold<int>(0, (s, f) => s + f.dnaVerifiedCount),
-      'totalFieldSize':       0.0, // fieldSize not in current schema — add if needed
+      'totalFarms':            farms.length,
+      'totalLibericaTrees':    farms.fold<int>(0, (s, f) => s + f.totalTrees),
+      'totalDnaVerifiedTrees': farms.fold<int>(0, (s, f) => s + f.dnaVerifiedCount),
     };
   }
 }

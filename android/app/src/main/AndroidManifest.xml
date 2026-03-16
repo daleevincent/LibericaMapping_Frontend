@@ -1,16 +1,18 @@
 <!-- android/app/src/main/AndroidManifest.xml -->
 <!--
-  IMPORTANT: Replace YOUR_GOOGLE_MAPS_API_KEY_HERE with your actual key.
-  Use the same API key you added to ios/Runner/AppDelegate.swift,
-  but make sure "Maps SDK for Android" is also enabled in Google Cloud Console.
+  Maps SDK for Android must be enabled in Google Cloud Console.
 -->
 
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Required permissions -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.CAMERA"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+
+    <!-- Declare camera feature (not required, but recommended) -->
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
 
     <application
         android:label="Liberica Farm Map"

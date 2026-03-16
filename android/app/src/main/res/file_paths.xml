@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Required by image_picker to store camera capture temp files -->
+    <external-path name="external_files" path="."/>
+    <cache-path name="cache_files" path="."/>
+</paths>

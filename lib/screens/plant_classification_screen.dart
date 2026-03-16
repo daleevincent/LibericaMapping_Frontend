@@ -12,10 +12,18 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
+import '../models/farm.dart';
 import '../models/prediction.dart';
+import '../services/farm_service.dart';
 import '../services/prediction_service.dart';
 import '../utils/app_theme.dart';
+import '../utils/mock_tree_data.dart';
+import 'tree_map_screen.dart';
+import 'prediction_detail_screen.dart';
+import 'liberica_map_screen.dart';
 
 class PlantClassificationScreen extends StatefulWidget {
   const PlantClassificationScreen({super.key});
@@ -29,23 +37,30 @@ class _PlantClassificationScreenState
     extends State<PlantClassificationScreen>
     with SingleTickerProviderStateMixin {
   final PredictionService _service = PredictionService();
+  final FarmService _farmService = FarmService();
   final ImagePicker _picker = ImagePicker();
 
   late TabController _tabController;
 
   // ── Classify tab state ───────────────────────────────────────────────────
   XFile? _selectedImageFile;
-  Uint8List? _selectedImageBytes; // used for preview + upload on web
+  Uint8List? _selectedImageBytes;
   String _plantPartMode = 'leaf';
   final _latController = TextEditingController();
   final _lngController = TextEditingController();
   bool _isClassifying = false;
   Prediction? _result;
 
+  // ── GPS state ────────────────────────────────────────────────────────────
+  bool _autoGps = true;          // toggle: auto-fill coords from device GPS
+  bool _isFetchingGps = false;   // spinner while fetching
+  String? _gpsError;             // error message if permission denied / fail
+
   // ── History tab state ────────────────────────────────────────────────────
   List<Prediction> _history = [];
   bool _isLoadingHistory = true;
-  String _historyFilter = 'all'; // all | leaf | bark | cherry | mix
+  String _historyFilter = 'all';      // all | leaf | bark | cherry | mix
+  String _resultFilter  = 'all';      // all | liberica | not_liberica
 
   static const List<Map<String, dynamic>> _modes = [
     {'value': 'leaf',   'label': 'Leaf',     'icon': Icons.eco_rounded},
@@ -69,20 +84,75 @@ class _PlantClassificationScreenState
     super.dispose();
   }
 
-  // ── Image picking ─────────────────────────────────────────────────────────
+  // ── Camera ────────────────────────────────────────────────────────────────
 
-  Future<void> _pickImage(ImageSource source) async {
+  Future<void> _takePhoto() async {
     final XFile? picked = await _picker.pickImage(
-      source: source,
+      source: ImageSource.camera,
       imageQuality: 85,
       maxWidth: 1024,
     );
-    if (picked != null) {
-      final bytes = await picked.readAsBytes();
+    if (picked == null) return;
+    final bytes = await picked.readAsBytes();
+    setState(() {
+      _selectedImageFile  = picked;
+      _selectedImageBytes = bytes;
+    });
+    // Auto-fetch GPS right after taking the photo if toggle is on
+    if (_autoGps) await _fetchGps();
+  }
+
+  // ── GPS location ──────────────────────────────────────────────────────────
+
+  Future<void> _fetchGps() async {
+    setState(() {
+      _isFetchingGps = true;
+      _gpsError = null;
+    });
+    try {
+      // Check & request permission
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        setState(() {
+          _gpsError = perm == LocationPermission.deniedForever
+              ? 'Location permission permanently denied. Enable it in Settings.'
+              : 'Location permission denied.';
+          _isFetchingGps = false;
+        });
+        return;
+      }
+
+      // Check if location services are enabled
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        setState(() {
+          _gpsError = 'Location services are disabled. Please turn on GPS.';
+          _isFetchingGps = false;
+        });
+        return;
+      }
+
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+
       setState(() {
-        _selectedImageFile  = picked;
-        _selectedImageBytes = bytes;
-        _result = null;
+        _latController.text = pos.latitude.toStringAsFixed(6);
+        _lngController.text = pos.longitude.toStringAsFixed(6);
+        _isFetchingGps = false;
+        _gpsError = null;
+      });
+    } catch (e) {
+      setState(() {
+        _gpsError = 'Could not get location: $e';
+        _isFetchingGps = false;
       });
     }
   }
@@ -139,9 +209,93 @@ class _PlantClassificationScreenState
     }
   }
 
+  // ── View on Tree Map ──────────────────────────────────────────────────────
+
+  Future<void> _viewOnTreeMap(Prediction p) async {
+    if (p.latitude == null || p.longitude == null) {
+      _showSnack('No GPS coordinates in this prediction.', isError: true);
+      return;
+    }
+
+    final lat = p.latitude!;
+    final lng = p.longitude!;
+    final coords = LatLng(lat, lng);
+
+    // Find which farm this tree belongs to via mock data
+    final result = MockTreeData.findByCoordinates(lat, lng);
+
+    Farm? targetFarm;
+
+    if (result != null) {
+      // Match found — load the real farm from backend (or fallback to mock)
+      try {
+        final farms = await _farmService.getAllFarms();
+        targetFarm = farms.firstWhere(
+          (f) => f.id == result.tree.farmId,
+          orElse: () => _buildMockFarm(result),
+        );
+      } catch (_) {
+        targetFarm = _buildMockFarm(result);
+      }
+    } else {
+      // No tree match — still navigate to the closest farm or first farm
+      try {
+        final farms = await _farmService.getAllFarms();
+        if (farms.isNotEmpty) targetFarm = farms.first;
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+
+    if (targetFarm == null) {
+      _showSnack('Could not find a matching farm.', isError: true);
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TreeMapScreen(
+          farm: targetFarm!,
+          highlightCoords: coords,
+        ),
+      ),
+    );
+  }
+
+  /// Builds a minimal Farm object from mock data when backend is unavailable
+  Farm _buildMockFarm(TreeLocationResult result) {
+    return Farm(
+      mongoId:          '',
+      id:               result.tree.farmId,
+      ownerId:          0,
+      name:             result.farmName,
+      cityId:           0,
+      cityName:         result.farmLocation.split(', ').last,
+      barangayName:     result.farmLocation.split(', ').first,
+      latitude:         result.tree.latitude,
+      longitude:        result.tree.longitude,
+      totalTrees:       0,
+      dnaVerifiedCount: 0,
+      hasDnaVerified:   false,
+      boundary:         const [],
+    );
+  }
+
+
   List<Prediction> get _filteredHistory {
-    if (_historyFilter == 'all') return _history;
-    return _history.where((p) => p.plantPartMode == _historyFilter).toList();
+    var list = _history;
+    // Filter by plant part
+    if (_historyFilter != 'all') {
+      list = list.where((p) => p.plantPartMode == _historyFilter).toList();
+    }
+    // Filter by result
+    if (_resultFilter == 'liberica') {
+      list = list.where((p) => p.isLiberica).toList();
+    } else if (_resultFilter == 'not_liberica') {
+      list = list.where((p) => !p.isLiberica).toList();
+    }
+    return list;
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -156,16 +310,23 @@ class _PlantClassificationScreenState
     ));
   }
 
-  void _reset() {
+  void _resetInputs() {
     setState(() {
       _selectedImageFile  = null;
       _selectedImageBytes = null;
-      _result = null;
       _latController.clear();
       _lngController.clear();
       _plantPartMode = 'leaf';
+      _gpsError = null;
+      // _result is intentionally kept — only replaced by new classification
     });
   }
+
+  bool get _hasAnyInput =>
+      _selectedImageBytes != null ||
+      _latController.text.isNotEmpty ||
+      _lngController.text.isNotEmpty ||
+      _plantPartMode != 'leaf';
 
   // ── Build ─────────────────────────────────────────────────────────────────
 
@@ -257,88 +418,176 @@ class _PlantClassificationScreenState
 
   Widget _buildClassifyTab() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(height: 4),
 
-          // ── Image picker ─────────────────────────────────────────────────
-          _buildSectionLabel('1. Select Image'),
-          const SizedBox(height: 10),
-          _buildImagePicker(),
-
-          const SizedBox(height: 20),
-
-          // ── Plant part mode ──────────────────────────────────────────────
-          _buildSectionLabel('2. Plant Part'),
-          const SizedBox(height: 10),
-          _buildModePicker(),
-
-          const SizedBox(height: 20),
-
-          // ── GPS coordinates ──────────────────────────────────────────────
-          _buildSectionLabel('3. GPS Coordinates'),
-          const SizedBox(height: 10),
-          _buildCoordinateFields(),
-
-          const SizedBox(height: 24),
-
-          // ── Classify button ──────────────────────────────────────────────
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: ElevatedButton.icon(
-              onPressed: _isClassifying ? null : _classify,
-              icon: _isClassifying
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Icon(Icons.search_rounded, size: 20),
-              label: Text(
-                _isClassifying ? 'Analysing...' : 'Classify Plant',
-                style: const TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w700),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primary,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-              ),
-            ),
+          // ── Step 1: Photo ─────────────────────────────────────────────────
+          _buildStepCard(
+            step: '1',
+            title: 'Take a Photo',
+            subtitle: 'Camera only — field capture required',
+            child: _buildImagePicker(),
           ),
 
-          // ── Result ───────────────────────────────────────────────────────
-          if (_result != null) ...[
-            const SizedBox(height: 24),
-            _buildResultCard(_result!),
-          ],
+          const SizedBox(height: 14),
+
+          // ── Step 2: Plant Part ────────────────────────────────────────────
+          _buildStepCard(
+            step: '2',
+            title: 'Plant Part',
+            subtitle: 'Select the part you photographed',
+            child: _buildModePicker(),
+          ),
+
+          const SizedBox(height: 14),
+
+          // ── Step 3: GPS ───────────────────────────────────────────────────
+          _buildStepCard(
+            step: '3',
+            title: 'GPS Coordinates',
+            subtitle: 'Auto-filled from your device location',
+            child: _buildCoordinateFields(),
+          ),
 
           const SizedBox(height: 20),
+
+          // ── Action buttons ────────────────────────────────────────────────
+          Row(
+            children: [
+              if (_hasAnyInput) ...[
+                SizedBox(
+                  height: 52,
+                  child: OutlinedButton.icon(
+                    onPressed: _isClassifying ? null : _resetInputs,
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    label: const Text('Reset',
+                        style: TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w600)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.textSecondary,
+                      side: BorderSide(color: Colors.grey.shade400),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+              ],
+              Expanded(
+                child: SizedBox(
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    onPressed: _isClassifying ? null : _classify,
+                    icon: _isClassifying
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.biotech_rounded, size: 20),
+                    label: Text(
+                      _isClassifying ? 'Analysing...' : 'Classify Plant',
+                      style: const TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w700),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primary,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          // ── Result ────────────────────────────────────────────────────────
+          if (_result != null) ...[
+            const SizedBox(height: 20),
+            _buildResultCard(_result!),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildSectionLabel(String text) {
-    return Text(
-      text,
-      style: const TextStyle(
-        fontSize: 13,
-        fontWeight: FontWeight.w700,
-        color: AppTheme.textSecondary,
-        letterSpacing: 0.3,
+  // Step card wrapper — clean numbered card UI
+  Widget _buildStepCard({
+    required String step,
+    required String title,
+    required String subtitle,
+    required Widget child,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+            child: Row(
+              children: [
+                Container(
+                  width: 26,
+                  height: 26,
+                  decoration: const BoxDecoration(
+                    color: AppTheme.primary,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Center(
+                    child: Text(
+                      step,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textPrimary)),
+                    Text(subtitle,
+                        style: const TextStyle(
+                            fontSize: 11, color: AppTheme.textLight)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            child: child,
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildImagePicker() {
     return GestureDetector(
-      onTap: () => _showImageSourceSheet(),
+      onTap: _selectedImageBytes == null ? _takePhoto : null,
       child: Container(
         height: 200,
         decoration: BoxDecoration(
@@ -369,135 +618,85 @@ class _PlantClassificationScreenState
                       fit: BoxFit.cover,
                     ),
                   ),
-                  // Replace image button
+                  // Retake button
                   Positioned(
                     top: 10,
                     right: 10,
                     child: GestureDetector(
-                      onTap: _reset,
+                      onTap: _takePhoto,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.55),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.camera_alt_rounded,
+                                color: Colors.white, size: 14),
+                            SizedBox(width: 4),
+                            Text('Retake',
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Clear button
+                  Positioned(
+                    top: 10,
+                    left: 10,
+                    child: GestureDetector(
+                      onTap: _resetInputs,
                       child: Container(
                         padding: const EdgeInsets.all(6),
                         decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.5),
+                          color: Colors.black.withValues(alpha: 0.55),
                           shape: BoxShape.circle,
                         ),
                         child: const Icon(Icons.close,
-                            color: Colors.white, size: 16),
+                            color: Colors.white, size: 14),
                       ),
                     ),
                   ),
                 ],
               )
-            : Column(
+            : Center(
+                child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.add_photo_alternate_rounded,
-                      size: 48,
-                      color: AppTheme.primary.withValues(alpha: 0.4)),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary.withValues(alpha: 0.08),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.camera_alt_rounded,
+                        size: 40,
+                        color: AppTheme.primary.withValues(alpha: 0.7)),
+                  ),
                   const SizedBox(height: 12),
                   const Text(
-                    'Tap to take photo or choose from gallery',
+                    'Tap to take a photo',
                     style: TextStyle(
-                        fontSize: 13, color: AppTheme.textSecondary),
-                    textAlign: TextAlign.center,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Camera only — no gallery upload',
+                    style: TextStyle(
+                        fontSize: 11, color: AppTheme.textLight),
                   ),
                 ],
-              ),
-      ),
-    );
-  }
-
-  void _showImageSourceSheet() {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade300,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'Select Image Source',
-                style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 16,
-                    color: AppTheme.textPrimary),
-              ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildSourceButton(
-                      icon: Icons.camera_alt_rounded,
-                      label: 'Camera',
-                      onTap: () {
-                        Navigator.pop(context);
-                        _pickImage(ImageSource.camera);
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _buildSourceButton(
-                      icon: Icons.photo_library_rounded,
-                      label: 'Gallery',
-                      onTap: () {
-                        Navigator.pop(context);
-                        _pickImage(ImageSource.gallery);
-                      },
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSourceButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        decoration: BoxDecoration(
-          color: AppTheme.primary.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-              color: AppTheme.primary.withValues(alpha: 0.2)),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, color: AppTheme.primary, size: 32),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: const TextStyle(
-                color: AppTheme.primary,
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
               ),
             ),
-          ],
-        ),
       ),
     );
   }
@@ -558,22 +757,147 @@ class _PlantClassificationScreenState
   }
 
   Widget _buildCoordinateFields() {
-    return Row(
-      children: [
-        Expanded(
-          child: _buildCoordField(
-              controller: _latController,
-              label: 'Latitude',
-              hint: 'e.g. 13.9288'),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _buildCoordField(
-              controller: _lngController,
-              label: 'Longitude',
-              hint: 'e.g. 121.1998'),
-        ),
-      ],
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Auto GPS toggle row ─────────────────────────────────────────
+          Row(
+            children: [
+              const Icon(Icons.gps_fixed,
+                  size: 16, color: AppTheme.primary),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Auto GPS',
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textPrimary)),
+                    Text('Fill coordinates from device location',
+                        style: TextStyle(
+                            fontSize: 11, color: AppTheme.textLight)),
+                  ],
+                ),
+              ),
+              Switch(
+                value: _autoGps,
+                onChanged: (v) async {
+                  setState(() => _autoGps = v);
+                  if (v) await _fetchGps();
+                },
+                activeThumbColor: AppTheme.primary,
+                activeTrackColor: AppTheme.primaryLight,
+              ),
+            ],
+          ),
+
+          // ── GPS status indicator ────────────────────────────────────────
+          if (_isFetchingGps) ...[
+            const SizedBox(height: 10),
+            const Row(
+              children: [
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppTheme.primary),
+                ),
+                SizedBox(width: 8),
+                Text('Getting your location...',
+                    style: TextStyle(
+                        fontSize: 12, color: AppTheme.primary)),
+              ],
+            ),
+          ],
+
+          if (_gpsError != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF3E0),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFFCC80)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber_rounded,
+                      size: 14, color: Color(0xFFF57C00)), // orange.shade700
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(_gpsError!,
+                        style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFFE65100))), // orange.shade800
+                  ),
+                  GestureDetector(
+                    onTap: _fetchGps,
+                    child: const Text('Retry',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.primary)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 12),
+          const Divider(height: 1),
+          const SizedBox(height: 12),
+
+          // ── Lat / Lng fields ────────────────────────────────────────────
+          Row(
+            children: [
+              Expanded(
+                child: _buildCoordField(
+                    controller: _latController,
+                    label: 'Latitude',
+                    hint: 'e.g. 13.9288'),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildCoordField(
+                    controller: _lngController,
+                    label: 'Longitude',
+                    hint: 'e.g. 121.1998'),
+              ),
+            ],
+          ),
+
+          // Manual refresh button
+          if (!_autoGps) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _isFetchingGps ? null : _fetchGps,
+                icon: const Icon(Icons.my_location_rounded, size: 15),
+                label: const Text('Get Current Location',
+                    style: TextStyle(fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.primary,
+                  side: const BorderSide(color: AppTheme.primary),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -617,247 +941,276 @@ class _PlantClassificationScreenState
     final resultColor =
         isLiberica ? AppTheme.dnaVerifiedColor : Colors.red.shade600;
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-            color: resultColor.withValues(alpha: 0.3), width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: resultColor.withValues(alpha: 0.1),
-            blurRadius: 20,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          // Result header
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: resultColor.withValues(alpha: 0.08),
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(23),
-                topRight: Radius.circular(23),
+    return Column(
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+                color: resultColor.withValues(alpha: 0.3), width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: resultColor.withValues(alpha: 0.1),
+                blurRadius: 20,
+                offset: const Offset(0, 6),
               ),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: resultColor.withValues(alpha: 0.15),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    isLiberica
-                        ? Icons.check_circle_rounded
-                        : Icons.cancel_rounded,
-                    color: resultColor,
-                    size: 28,
+            ],
+          ),
+          child: Column(
+            children: [
+              // Result header
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: resultColor.withValues(alpha: 0.08),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(23),
+                    topRight: Radius.circular(23),
                   ),
                 ),
-                const SizedBox(width: 16),
-                Expanded(
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: resultColor.withValues(alpha: 0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        isLiberica
+                            ? Icons.check_circle_rounded
+                            : Icons.cancel_rounded,
+                        color: resultColor,
+                        size: 28,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            p.finalPrediction,
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                              color: resultColor,
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                          Text(
+                            'Confidence: ${p.confidenceLabel}',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: AppTheme.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Confidence bar
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Confidence',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: AppTheme.textSecondary,
+                                fontWeight: FontWeight.w500)),
+                        Text(p.confidenceLabel,
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: resultColor)),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: p.confidenceRatio / 100,
+                        backgroundColor: Colors.grey.shade100,
+                        valueColor:
+                            AlwaysStoppedAnimation<Color>(resultColor),
+                        minHeight: 8,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Details row
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    _buildResultDetail(
+                      'Plant Part',
+                      p.modeLabel,
+                      Icons.category_rounded,
+                    ),
+                    _buildResultDetail(
+                      'Latitude',
+                      p.latitude?.toStringAsFixed(6) ?? 'N/A',
+                      Icons.gps_fixed,
+                    ),
+                    _buildResultDetail(
+                      'Longitude',
+                      p.longitude?.toStringAsFixed(6) ?? 'N/A',
+                      Icons.explore_rounded,
+                    ),
+                  ],
+                ),
+              ),
+
+              // Grad-CAM heatmap
+              if (p.hasGradCam) ...[
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        p.finalPrediction,
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                          color: resultColor,
-                          letterSpacing: -0.5,
-                        ),
+                      const Row(
+                        children: [
+                          Icon(Icons.gradient_rounded,
+                              size: 16, color: AppTheme.accent),
+                          SizedBox(width: 6),
+                          Text(
+                            'Grad-CAM Visualization',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                        ],
                       ),
-                      Text(
-                        'Confidence: ${p.confidenceLabel}',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: AppTheme.textSecondary,
-                        ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Highlighted regions influenced the prediction',
+                        style: TextStyle(
+                            fontSize: 11, color: AppTheme.textLight),
+                      ),
+                      const SizedBox(height: 10),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: _buildBase64Image(p.gradCamImage!),
                       ),
                     ],
                   ),
                 ),
               ],
-            ),
-          ),
 
-          // Confidence bar
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Confidence',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: AppTheme.textSecondary,
-                            fontWeight: FontWeight.w500)),
-                    Text(p.confidenceLabel,
-                        style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: resultColor)),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: p.confidenceRatio / 100,
-                    backgroundColor: Colors.grey.shade100,
-                    valueColor: AlwaysStoppedAnimation<Color>(resultColor),
-                    minHeight: 8,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Details row
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                _buildResultDetail(
-                  'Plant Part',
-                  p.modeLabel,
-                  Icons.category_rounded,
-                ),
-                _buildResultDetail(
-                  'Latitude',
-                  p.latitude?.toStringAsFixed(6) ?? 'N/A',
-                  Icons.gps_fixed,
-                ),
-                _buildResultDetail(
-                  'Longitude',
-                  p.longitude?.toStringAsFixed(6) ?? 'N/A',
-                  Icons.explore_rounded,
-                ),
-              ],
-            ),
-          ),
-
-          // Grad-CAM heatmap (base64 image from backend)
-          if (p.hasGradCam) ...[
-            const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
+              // Individual model predictions (mix mode)
+              if (p.individualPredictions.isNotEmpty) ...[
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.gradient_rounded,
-                          size: 16, color: AppTheme.accent),
-                      SizedBox(width: 6),
-                      Text(
-                        'Grad-CAM Visualization',
+                      const Text(
+                        'Per-Model Results',
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w700,
                           color: AppTheme.textPrimary,
                         ),
                       ),
+                      const SizedBox(height: 10),
+                      for (final entry in p.individualPredictions.entries)
+                        Builder(builder: (context) {
+                          final organ = entry.key;
+                          final pred  = entry.value;
+                          final isLib = pred.prediction.toLowerCase() ==
+                              'liberica';
+                          final c = isLib
+                              ? AppTheme.dnaVerifiedColor
+                              : Colors.red.shade400;
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 60,
+                                  child: Text(
+                                    organ[0].toUpperCase() +
+                                        organ.substring(1),
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppTheme.textSecondary,
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: LinearProgressIndicator(
+                                      value: pred.confidence / 100,
+                                      backgroundColor:
+                                          Colors.grey.shade100,
+                                      valueColor:
+                                          AlwaysStoppedAnimation<Color>(c),
+                                      minHeight: 8,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '${pred.confidence.toStringAsFixed(1)}%',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: c,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
                     ],
                   ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Highlighted regions influenced the prediction',
-                    style: TextStyle(fontSize: 11, color: AppTheme.textLight),
-                  ),
-                  const SizedBox(height: 10),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: _buildBase64Image(p.gradCamImage!),
-                  ),
-                ],
-              ),
-            ),
-          ],
+                ),
+              ],
+            ],
+          ),
+        ),
 
-          // Individual model predictions (for mix mode)
-          if (p.individualPredictions.isNotEmpty) ...[
-            const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Per-Model Results',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: AppTheme.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  for (final entry in p.individualPredictions.entries)
-                    Builder(builder: (context) {
-                      final organ = entry.key;
-                      final pred  = entry.value;
-                      final isLib = pred.prediction.toLowerCase() == 'liberica';
-                      final c = isLib
-                          ? AppTheme.dnaVerifiedColor
-                          : Colors.red.shade400;
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Row(
-                          children: [
-                            SizedBox(
-                              width: 60,
-                              child: Text(
-                                organ[0].toUpperCase() + organ.substring(1),
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppTheme.textSecondary,
-                                ),
-                              ),
-                            ),
-                            Expanded(
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(4),
-                                child: LinearProgressIndicator(
-                                  value: pred.confidence / 100,
-                                  backgroundColor: Colors.grey.shade100,
-                                  valueColor: AlwaysStoppedAnimation<Color>(c),
-                                  minHeight: 8,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '${pred.confidence.toStringAsFixed(1)}%',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: c,
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }),
-                ],
-              ),
+        // ── View on Tree Map button ─────────────────────────────────────────
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () => _viewOnTreeMap(p),
+            icon: const Icon(Icons.map_rounded, size: 16),
+            label: const Text(
+              'View on Tree Map',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
             ),
-          ],
-        ],
-      ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppTheme.primary,
+              side: const BorderSide(color: AppTheme.primary),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ),
+      ],
     );
   }
-
-  // Decode base64 string ("data:image/png;base64,...") to image widget
   Widget _buildBase64Image(String base64Str) {
     try {
       final data = base64Str.contains(',')
@@ -906,30 +1259,47 @@ class _PlantClassificationScreenState
   // ── History tab ───────────────────────────────────────────────────────────
 
   Widget _buildHistoryTab() {
+    final libericaCount = _history.where((p) => p.isLiberica).length;
     return Column(
       children: [
-        // Filter chips
+        // ── Row 1: Result filter ──────────────────────────────────────────
         Container(
           color: Colors.white,
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                _buildHistoryFilterChip('all', 'All'),
-                ..._modes.map((m) =>
-                    _buildHistoryFilterChip(
-                        m['value'] as String, m['label'] as String)),
+                _buildResultFilterChip('all', 'All', AppTheme.primary),
+                _buildResultFilterChip(
+                    'liberica', '🌿 Liberica', AppTheme.dnaVerifiedColor),
+                _buildResultFilterChip(
+                    'not_liberica', '✗ Not Liberica', Colors.red.shade500),
               ],
             ),
           ),
         ),
 
-        // Summary counts
-        if (!_isLoadingHistory)
-          _buildHistorySummary(),
+        // ── Row 2: Plant part filter ──────────────────────────────────────
+        Container(
+          color: Colors.white,
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _buildHistoryFilterChip('all', 'All Parts'),
+                ..._modes.map((m) => _buildHistoryFilterChip(
+                    m['value'] as String, m['label'] as String)),
+              ],
+            ),
+          ),
+        ),
 
-        // List
+        // ── Summary counts + Map button ───────────────────────────────────
+        if (!_isLoadingHistory) _buildHistorySummary(libericaCount),
+
+        // ── List ─────────────────────────────────────────────────────────
         Expanded(
           child: _isLoadingHistory
               ? const Center(
@@ -948,6 +1318,30 @@ class _PlantClassificationScreenState
                     ),
         ),
       ],
+    );
+  }
+
+  Widget _buildResultFilterChip(String value, String label, Color activeColor) {
+    final isSelected = _resultFilter == value;
+    return GestureDetector(
+      onTap: () => setState(() => _resultFilter = value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        margin: const EdgeInsets.only(right: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: isSelected ? activeColor : Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: isSelected ? Colors.white : AppTheme.textSecondary,
+          ),
+        ),
+      ),
     );
   }
 
@@ -975,19 +1369,60 @@ class _PlantClassificationScreenState
     );
   }
 
-  Widget _buildHistorySummary() {
+  Widget _buildHistorySummary(int libericaCount) {
     final all = _history.length;
-    final liberica = _history.where((p) => p.isLiberica).length;
-    final notLiberica = all - liberica;
+    final notLiberica = all - libericaCount;
 
     return Container(
       color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       child: Row(
         children: [
           _buildHistoryStat('$all', 'Total', AppTheme.textSecondary),
-          _buildHistoryStat('$liberica', 'Liberica', AppTheme.dnaVerifiedColor),
+          _buildHistoryStat('$libericaCount', 'Liberica', AppTheme.dnaVerifiedColor),
           _buildHistoryStat('$notLiberica', 'Not Liberica', Colors.red.shade400),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: libericaCount == 0
+                ? null
+                : () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const LibericaMapScreen(),
+                      ),
+                    ),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: libericaCount > 0
+                    ? AppTheme.primary
+                    : Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.map_rounded,
+                      size: 13,
+                      color: libericaCount > 0
+                          ? Colors.white
+                          : AppTheme.textLight),
+                  const SizedBox(width: 5),
+                  Text(
+                    'View Map',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: libericaCount > 0
+                          ? Colors.white
+                          : AppTheme.textLight,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -1015,7 +1450,14 @@ class _PlantClassificationScreenState
     final color =
         isLiberica ? AppTheme.dnaVerifiedColor : Colors.red.shade500;
 
-    return Container(
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PredictionDetailScreen(prediction: p),
+        ),
+      ),
+      child: Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -1074,21 +1516,30 @@ class _PlantClassificationScreenState
           ],
         ),
         isThreeLine: true,
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Text(
-            p.confidenceLabel,
-            style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: color),
-          ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                p.confidenceLabel,
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: color),
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.chevron_right_rounded,
+                color: AppTheme.textLight, size: 18),
+          ],
         ),
       ),
+    ),
     );
   }
 

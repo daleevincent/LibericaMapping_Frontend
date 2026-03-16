@@ -261,15 +261,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                       ),
                     ),
                   ),
-
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Demo credentials: admin / liberica2024',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppTheme.textLight,
-                    ),
-                  ),
                 ],
               ),
             ),

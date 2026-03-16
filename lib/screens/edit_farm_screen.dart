@@ -1,206 +1,205 @@
-// lib/screens/edit_farm_screen.dart
+// lib/screens/add_farm_screen.dart
 //
-// Full-screen admin editor for a single farm.
-// Features:
-//   • View all trees for this farm
-//   • Add a new tree (lat, lng, DNA verified toggle)
-//   • Delete an existing tree
-//   • Save calls PUT /api/farms/:id  and  POST/DELETE /api/trees
+// Full-screen form to add a new farm.
+// Fields match the MongoDB farm document schema exactly.
 
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 import '../models/farm.dart';
-import '../models/tree.dart';
-import '../services/tree_service.dart';
+import '../services/farm_service.dart';
 import '../utils/app_theme.dart';
 
-class EditFarmScreen extends StatefulWidget {
-  final Farm farm;
-
-  const EditFarmScreen({super.key, required this.farm});
+class AddFarmScreen extends StatefulWidget {
+  const AddFarmScreen({super.key});
 
   @override
-  State<EditFarmScreen> createState() => _EditFarmScreenState();
+  State<AddFarmScreen> createState() => _AddFarmScreenState();
 }
 
-class _EditFarmScreenState extends State<EditFarmScreen> {
-  final TreeService _treeService = TreeService();
+class _AddFarmScreenState extends State<AddFarmScreen> {
+  final FarmService _farmService = FarmService();
+  final _formKey = GlobalKey<FormState>();
+  bool _isSaving = false;
+  List<Farm> _existingFarms = [];
 
-  // ── Tree list state ──────────────────────────────────────────────────────
-  List<CoffeeTree> _trees = [];
-  bool _isLoadingTrees = true;
+  // ── Duplicate warning state ───────────────────────────────────────────────
+  Farm? _duplicateFarm; // non-null = duplicate detected
 
-  // ── Add-tree form controllers ────────────────────────────────────────────
-  final _latController  = TextEditingController();
-  final _lngController  = TextEditingController();
-  bool _isDnaVerified   = false;
-  bool _isAddingTree    = false;  // loading indicator for POST
-  bool _showAddForm     = false;
+  // ── Form controllers ──────────────────────────────────────────────────────
+  final _nameCtrl        = TextEditingController();
+  final _ownerIdCtrl     = TextEditingController();
+  final _cityIdCtrl      = TextEditingController();
+  final _cityNameCtrl    = TextEditingController();
+  final _barangayCtrl    = TextEditingController();
+  final _latCtrl         = TextEditingController();
+  final _lngCtrl         = TextEditingController();
+  final _totalTreesCtrl  = TextEditingController(text: '0');
+  final _dnaCountCtrl    = TextEditingController(text: '0');
+  bool _hasDnaVerified   = false;
 
-  // ── Track pending deletes locally before save ────────────────────────────
-  final Set<String> _pendingDeletes = {};
+  // ── Boundary points ───────────────────────────────────────────────────────
+  final List<Map<String, TextEditingController>> _boundaryPoints = [];
 
   @override
   void initState() {
     super.initState();
-    _loadTrees();
+    _loadExistingFarms();
+    _nameCtrl.addListener(_checkDuplicate);
+    _cityIdCtrl.addListener(_checkDuplicate);
+    _latCtrl.addListener(_checkDuplicate);
+    _lngCtrl.addListener(_checkDuplicate);
+  }
+
+  Future<void> _loadExistingFarms() async {
+    try {
+      final farms = await _farmService.getAllFarms();
+      setState(() => _existingFarms = farms);
+    } catch (_) {}
+  }
+
+  void _checkDuplicate() {
+    final name   = _nameCtrl.text.trim().toLowerCase();
+    final cityId = int.tryParse(_cityIdCtrl.text.trim());
+    final lat    = double.tryParse(_latCtrl.text.trim());
+    final lng    = double.tryParse(_lngCtrl.text.trim());
+
+    if (name.isEmpty || cityId == null || lat == null || lng == null) {
+      if (_duplicateFarm != null) setState(() => _duplicateFarm = null);
+      return;
+    }
+
+    Farm? found;
+    for (final farm in _existingFarms) {
+      final sameName   = farm.name.trim().toLowerCase() == name;
+      final sameCityId = farm.cityId == cityId;
+      final sameLat    = (farm.latitude  - lat).abs() < 0.00001;
+      final sameLng    = (farm.longitude - lng).abs() < 0.00001;
+      if (sameName && sameCityId && sameLat && sameLng) {
+        found = farm;
+        break;
+      }
+    }
+
+    if (found != _duplicateFarm) setState(() => _duplicateFarm = found);
   }
 
   @override
   void dispose() {
-    _latController.dispose();
-    _lngController.dispose();
+    _nameCtrl.dispose();
+    _ownerIdCtrl.dispose();
+    _cityIdCtrl.dispose();
+    _cityNameCtrl.dispose();
+    _barangayCtrl.dispose();
+    _latCtrl.dispose();
+    _lngCtrl.dispose();
+    _totalTreesCtrl.dispose();
+    _dnaCountCtrl.dispose();
+    for (final p in _boundaryPoints) {
+      p['lat']!.dispose();
+      p['lng']!.dispose();
+    }
     super.dispose();
   }
 
-  // ── Data loading ─────────────────────────────────────────────────────────
+  // ── Boundary management ───────────────────────────────────────────────────
 
-  Future<void> _loadTrees() async {
-    try {
-      final trees = await _treeService.getTreesForFarm(widget.farm.id);
-      setState(() {
-        _trees = trees;
-        _isLoadingTrees = false;
+  void _addBoundaryPoint() {
+    setState(() {
+      _boundaryPoints.add({
+        'lat': TextEditingController(),
+        'lng': TextEditingController(),
       });
-    } catch (e) {
-      setState(() => _isLoadingTrees = false);
-      _showSnack('Failed to load trees: $e', isError: true);
-    }
+    });
   }
 
-  // ── Add tree ─────────────────────────────────────────────────────────────
-
-  Future<void> _addTree() async {
-    final lat = double.tryParse(_latController.text.trim());
-    final lng = double.tryParse(_lngController.text.trim());
-
-    if (lat == null || lng == null) {
-      _showSnack('Please enter valid latitude and longitude.', isError: true);
-      return;
-    }
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-      _showSnack('Coordinates are out of valid range.', isError: true);
-      return;
-    }
-
-    setState(() => _isAddingTree = true);
-
-    final newTree = CoffeeTree(
-      treeId:    '${widget.farm.id}_T${(_trees.length + 1).toString().padLeft(3, '0')}',
-      farmId:    widget.farm.id,
-      latitude:  lat,
-      longitude: lng,
-      status:    _isDnaVerified
-                     ? TreeStatus.dnaVerified
-                     : TreeStatus.nonDnaVerified,
-    );
-
-    try {
-      // POST to backend — replace with actual API call when backend is ready
-      // final saved = await _treeService.addTree(newTree);
-      // For now, add locally:
-      setState(() {
-        _trees.add(newTree);
-        _latController.clear();
-        _lngController.clear();
-        _isDnaVerified = false;
-        _showAddForm   = false;
-        _isAddingTree  = false;
-      });
-      _showSnack('Tree added successfully.');
-    } catch (e) {
-      setState(() => _isAddingTree = false);
-      _showSnack('Failed to add tree: $e', isError: true);
-    }
+  void _removeBoundaryPoint(int index) {
+    setState(() {
+      _boundaryPoints[index]['lat']!.dispose();
+      _boundaryPoints[index]['lng']!.dispose();
+      _boundaryPoints.removeAt(index);
+    });
   }
 
-  // ── Delete tree ──────────────────────────────────────────────────────────
+  // ── Save ──────────────────────────────────────────────────────────────────
 
-  void _confirmDelete(CoffeeTree tree) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Delete Tree?'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              tree.treeId,
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                color: AppTheme.textPrimary,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '${tree.latitude.toStringAsFixed(6)}, ${tree.longitude.toStringAsFixed(6)}',
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppTheme.textLight,
-                fontFamily: 'Courier',
-              ),
-            ),
-            const SizedBox(height: 12),
-            const Text('This action cannot be undone.'),
-          ],
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    // Block save if duplicate detected
+    if (_duplicateFarm != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+              '⚠️ A farm with the same details already exists. Please review the warning above.'),
+          backgroundColor: Colors.orange.shade700,
+          behavior: SnackBarBehavior.floating,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _deleteTree(tree);
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-            ),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-  }
+      );
+      return;
+    }
 
-  Future<void> _deleteTree(CoffeeTree tree) async {
+    setState(() => _isSaving = true);
+
     try {
-      // DELETE to backend — replace with actual API call when backend is ready
-      // await _treeService.deleteTree(tree.mongoId);
-      // For now, remove locally:
-      setState(() {
-        _trees.removeWhere((t) => t.treeId == tree.treeId);
-        _pendingDeletes.add(tree.treeId);
-      });
-      _showSnack('Tree ${tree.treeId} deleted.');
+      // Build boundary list
+      final boundary = <LatLng>[];
+      for (final point in _boundaryPoints) {
+        final lat = double.tryParse(point['lat']!.text.trim());
+        final lng = double.tryParse(point['lng']!.text.trim());
+        if (lat != null && lng != null) {
+          boundary.add(LatLng(lat, lng));
+        }
+      }
+
+      final farm = Farm(
+        mongoId:          '',
+        id:               int.tryParse(_ownerIdCtrl.text.trim()) ?? 0,
+        ownerId:          int.tryParse(_ownerIdCtrl.text.trim()) ?? 0,
+        name:             _nameCtrl.text.trim(),
+        cityId:           int.tryParse(_cityIdCtrl.text.trim()) ?? 0,
+        cityName:         _cityNameCtrl.text.trim(),
+        barangayName:     _barangayCtrl.text.trim(),
+        latitude:         double.parse(_latCtrl.text.trim()),
+        longitude:        double.parse(_lngCtrl.text.trim()),
+        totalTrees:       int.tryParse(_totalTreesCtrl.text.trim()) ?? 0,
+        dnaVerifiedCount: int.tryParse(_dnaCountCtrl.text.trim()) ?? 0,
+        hasDnaVerified:   _hasDnaVerified,
+        boundary:         boundary,
+      );
+
+      await _farmService.addFarm(farm);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ ${farm.name} added successfully!'),
+            backgroundColor: AppTheme.primary,
+            behavior: SnackBarBehavior.floating,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+        Navigator.pop(context, true); // return true = refresh list
+      }
     } catch (e) {
-      _showSnack('Failed to delete tree: $e', isError: true);
+      setState(() => _isSaving = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to add farm: $e'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      }
     }
   }
 
-  // ── Helpers ──────────────────────────────────────────────────────────────
-
-  void _showSnack(String message, {bool isError = false}) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? Colors.red : AppTheme.primary,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-    );
-  }
-
-  int get _dnaCount  => _trees.where((t) => t.isDnaVerified).length;
-  int get _totalCount => _trees.length;
-
-  // ── Build ────────────────────────────────────────────────────────────────
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -209,299 +208,526 @@ class _EditFarmScreenState extends State<EditFarmScreen> {
       appBar: AppBar(
         backgroundColor: AppTheme.primary,
         foregroundColor: Colors.white,
-        title: Column(
+        title: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              widget.farm.name,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-            ),
-            Text(
-              widget.farm.location,
-              style: const TextStyle(fontSize: 11, color: Colors.white70),
-            ),
+            Text('Add New Farm',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            Text('Fill in all farm details',
+                style: TextStyle(fontSize: 11, color: Colors.white70)),
           ],
         ),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
-            child: TextButton.icon(
-              onPressed: () => setState(() => _showAddForm = !_showAddForm),
-              icon: Icon(
-                _showAddForm ? Icons.close : Icons.add,
-                color: Colors.white,
-                size: 18,
-              ),
-              label: Text(
-                _showAddForm ? 'Cancel' : 'Add Tree',
-                style: const TextStyle(color: Colors.white, fontSize: 13),
-              ),
+            child: TextButton(
+              onPressed: _isSaving ? null : _save,
+              child: _isSaving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Text('Save',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15)),
             ),
           ),
         ],
       ),
-      body: Column(
-        children: [
-          // ── Farm summary bar ─────────────────────────────────────────────
-          _buildSummaryBar(),
+      body: Form(
+        key: _formKey,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Farm Info ─────────────────────────────────────────────────
+              _buildSection('Farm Information', Icons.eco_rounded, [
+                _buildTextField(
+                  controller: _nameCtrl,
+                  label: 'Farm Name',
+                  hint: 'e.g. Reyes Coffee Farm',
+                  validator: (v) =>
+                      v == null || v.isEmpty ? 'Farm name is required' : null,
+                ),
+                const SizedBox(height: 12),
+                _buildTextField(
+                  controller: _ownerIdCtrl,
+                  label: 'Owner ID',
+                  hint: 'e.g. 1',
+                  keyboardType: TextInputType.number,
+                  validator: (v) =>
+                      v == null || v.isEmpty ? 'Owner ID is required' : null,
+                ),
+              ]),
 
-          // ── Add tree form (collapsible) ──────────────────────────────────
-          AnimatedSize(
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeInOut,
-            child: _showAddForm ? _buildAddTreeForm() : const SizedBox.shrink(),
-          ),
+              const SizedBox(height: 16),
 
-          // ── Tree list ────────────────────────────────────────────────────
-          Expanded(
-            child: _isLoadingTrees
-                ? const Center(
-                    child: CircularProgressIndicator(color: AppTheme.primary),
-                  )
-                : _trees.isEmpty
-                    ? _buildEmptyState()
-                    : _buildTreeList(),
+              // ── Location ──────────────────────────────────────────────────
+              _buildSection('Location', Icons.location_on_rounded, [
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildTextField(
+                        controller: _cityIdCtrl,
+                        label: 'City ID',
+                        hint: 'e.g. 41014070',
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _buildTextField(
+                        controller: _cityNameCtrl,
+                        label: 'City Name',
+                        hint: 'e.g. Lipa City',
+                        validator: (v) => v == null || v.isEmpty
+                            ? 'City name is required'
+                            : null,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _buildTextField(
+                  controller: _barangayCtrl,
+                  label: 'Barangay Name',
+                  hint: 'e.g. Tangob',
+                  validator: (v) => v == null || v.isEmpty
+                      ? 'Barangay name is required'
+                      : null,
+                ),
+              ]),
+
+              const SizedBox(height: 16),
+
+              // ── Coordinates ───────────────────────────────────────────────
+              _buildSection('Farm Coordinates', Icons.gps_fixed, [
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildTextField(
+                        controller: _latCtrl,
+                        label: 'Latitude',
+                        hint: 'e.g. 13.9288',
+                        keyboardType: const TextInputType.numberWithOptions(
+                            signed: true, decimal: true),
+                        validator: (v) {
+                          if (v == null || v.isEmpty) return 'Required';
+                          if (double.tryParse(v) == null) {
+                            return 'Invalid number';
+                          }
+                          return null;
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _buildTextField(
+                        controller: _lngCtrl,
+                        label: 'Longitude',
+                        hint: 'e.g. 121.1998',
+                        keyboardType: const TextInputType.numberWithOptions(
+                            signed: true, decimal: true),
+                        validator: (v) {
+                          if (v == null || v.isEmpty) return 'Required';
+                          if (double.tryParse(v) == null) {
+                            return 'Invalid number';
+                          }
+                          return null;
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ]),
+
+              const SizedBox(height: 16),
+
+              // ── Tree counts ───────────────────────────────────────────────
+              _buildSection('Tree Data', Icons.park_rounded, [
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildTextField(
+                        controller: _totalTreesCtrl,
+                        label: 'Total Trees',
+                        hint: '0',
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _buildTextField(
+                        controller: _dnaCountCtrl,
+                        label: 'DNA Verified Count',
+                        hint: '0',
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                GestureDetector(
+                  onTap: () =>
+                      setState(() => _hasDnaVerified = !_hasDnaVerified),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: _hasDnaVerified
+                          ? AppTheme.dnaVerifiedColor.withValues(alpha: 0.08)
+                          : Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _hasDnaVerified
+                            ? AppTheme.dnaVerifiedColor.withValues(alpha: 0.4)
+                            : Colors.grey.shade300,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          _hasDnaVerified
+                              ? Icons.check_circle_rounded
+                              : Icons.radio_button_unchecked_rounded,
+                          color: _hasDnaVerified
+                              ? AppTheme.dnaVerifiedColor
+                              : Colors.grey,
+                          size: 22,
+                        ),
+                        const SizedBox(width: 10),
+                        Text(
+                          _hasDnaVerified
+                              ? 'Has DNA Verified Trees'
+                              : 'No DNA Verified Trees',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                            color: _hasDnaVerified
+                                ? AppTheme.dnaVerifiedColor
+                                : AppTheme.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ]),
+
+              const SizedBox(height: 16),
+
+              // ── Boundary ──────────────────────────────────────────────────
+              _buildSection('Farm Boundary', Icons.crop_free_rounded, [
+                if (_boundaryPoints.isEmpty)
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.grey.shade200),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.info_outline_rounded,
+                            size: 16, color: AppTheme.textLight),
+                        SizedBox(width: 8),
+                        Text(
+                          'No boundary points added yet',
+                          style: TextStyle(
+                              fontSize: 13, color: AppTheme.textLight),
+                        ),
+                      ],
+                    ),
+                  ),
+                for (int i = 0; i < _boundaryPoints.length; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 28,
+                          height: 28,
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary.withValues(alpha: 0.1),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: Text(
+                              '${i + 1}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.primary,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _buildTextField(
+                            controller: _boundaryPoints[i]['lat']!,
+                            label: 'Lat',
+                            hint: '13.9288',
+                            keyboardType: const TextInputType.numberWithOptions(
+                                signed: true, decimal: true),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildTextField(
+                            controller: _boundaryPoints[i]['lng']!,
+                            label: 'Lng',
+                            hint: '121.1998',
+                            keyboardType: const TextInputType.numberWithOptions(
+                                signed: true, decimal: true),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () => _removeBoundaryPoint(i),
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(Icons.delete_outline_rounded,
+                                color: Colors.red, size: 16),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _addBoundaryPoint,
+                    icon: const Icon(Icons.add_location_alt_rounded, size: 18),
+                    label: const Text('Add Boundary Point'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.primary,
+                      side: const BorderSide(color: AppTheme.primary),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+              ]),
+
+              const SizedBox(height: 16),
+
+              // ── Duplicate warning ─────────────────────────────────────────
+              if (_duplicateFarm != null) _buildDuplicateWarning(_duplicateFarm!),
+
+              const SizedBox(height: 24),
+
+              // ── Save button ───────────────────────────────────────────────
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton.icon(
+                  onPressed: (_isSaving || _duplicateFarm != null) ? null : _save,
+                  icon: _isSaving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : Icon(
+                          _duplicateFarm != null
+                              ? Icons.block_rounded
+                              : Icons.save_rounded,
+                          size: 20),
+                  label: Text(
+                    _isSaving
+                        ? 'Saving...'
+                        : _duplicateFarm != null
+                            ? 'Duplicate — Cannot Save'
+                            : 'Save Farm',
+                    style: const TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w700),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _duplicateFarm != null
+                        ? Colors.orange.shade300
+                        : AppTheme.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 30),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
-  // ── Summary bar ──────────────────────────────────────────────────────────
+  // ── Duplicate warning card ────────────────────────────────────────────────
 
-  Widget _buildSummaryBar() {
-    return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-      child: Row(
-        children: [
-          _buildStat('$_totalCount', 'Total Trees', AppTheme.primary),
-          _buildDivider(),
-          _buildStat('$_dnaCount', 'DNA Verified', AppTheme.dnaVerifiedColor),
-          _buildDivider(),
-          _buildStat(
-            '${_totalCount - _dnaCount}',
-            'Non-Verified',
-            AppTheme.nonVerifiedColor,
-          ),
-          _buildDivider(),
-          _buildStat(
-            _totalCount > 0
-                ? '${(_dnaCount / _totalCount * 100).toStringAsFixed(0)}%'
-                : '0%',
-            'Rate',
-            AppTheme.accent,
-          ),
-        ],
+  Widget _buildDuplicateWarning(Farm farm) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.orange.shade300, width: 1.5),
       ),
-    );
-  }
-
-  Widget _buildStat(String value, String label, Color color) {
-    return Expanded(
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Row(
+            children: [
+              Icon(Icons.warning_amber_rounded,
+                  color: Colors.orange.shade700, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Duplicate Farm Detected',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.orange.shade800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
           Text(
-            value,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-              color: color,
+            'A farm with the same name, city, and coordinates already exists in the database:',
+            style: TextStyle(fontSize: 12, color: Colors.orange.shade700),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.orange.shade200),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildDuplicateRow(Icons.eco_rounded, 'Name', farm.name),
+                _buildDuplicateRow(Icons.location_city_rounded, 'City', '${farm.cityName} (ID: ${farm.cityId})'),
+                _buildDuplicateRow(Icons.place_rounded, 'Barangay', farm.barangayName),
+                _buildDuplicateRow(Icons.gps_fixed, 'Coordinates',
+                    '${farm.latitude.toStringAsFixed(5)}, ${farm.longitude.toStringAsFixed(5)}'),
+                _buildDuplicateRow(Icons.park_rounded, 'Trees',
+                    '${farm.totalTrees} total · ${farm.dnaVerifiedCount} DNA verified'),
+              ],
             ),
           ),
+          const SizedBox(height: 10),
           Text(
-            label,
-            style: const TextStyle(fontSize: 10, color: AppTheme.textLight),
-            textAlign: TextAlign.center,
+            'Saving is disabled until you change the conflicting fields.',
+            style: TextStyle(
+              fontSize: 11,
+              fontStyle: FontStyle.italic,
+              color: Colors.orange.shade600,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildDivider() => Container(
-        width: 1, height: 32, color: Colors.grey.shade200,
-      );
+  Widget _buildDuplicateRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 14, color: Colors.orange.shade400),
+          const SizedBox(width: 6),
+          Text(
+            '$label: ',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Colors.orange.shade800,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(fontSize: 12, color: Colors.orange.shade700),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-  // ── Add tree form ────────────────────────────────────────────────────────
+  // ── Section card ──────────────────────────────────────────────────────────
 
-  Widget _buildAddTreeForm() {
+  Widget _buildSection(
+      String title, IconData icon, List<Widget> children) {
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
         boxShadow: [
           BoxShadow(
-            color: AppTheme.primary.withValues(alpha: 0.08),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
-          const Row(
+          Row(
             children: [
-              Icon(Icons.add_location_alt_rounded,
-                  color: AppTheme.primary, size: 20),
-              SizedBox(width: 8),
+              Icon(icon, color: AppTheme.primary, size: 18),
+              const SizedBox(width: 8),
               Text(
-                'Add New Tree',
-                style: TextStyle(
+                title,
+                style: const TextStyle(
+                  fontSize: 14,
                   fontWeight: FontWeight.w700,
-                  fontSize: 15,
                   color: AppTheme.textPrimary,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
-
-          // Coordinate fields
-          Row(
-            children: [
-              Expanded(
-                child: _buildCoordField(
-                  controller: _latController,
-                  label: 'Latitude',
-                  hint: 'e.g. 13.928890',
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildCoordField(
-                  controller: _lngController,
-                  label: 'Longitude',
-                  hint: 'e.g. 121.199803',
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 12),
-
-          // DNA Verified toggle
-          GestureDetector(
-            onTap: () => setState(() => _isDnaVerified = !_isDnaVerified),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: _isDnaVerified
-                    ? AppTheme.dnaVerifiedColor.withValues(alpha: 0.08)
-                    : Colors.grey.shade50,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: _isDnaVerified
-                      ? AppTheme.dnaVerifiedColor.withValues(alpha: 0.4)
-                      : Colors.grey.shade300,
-                ),
-              ),
-              child: Row(
-                children: [
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 200),
-                    child: Icon(
-                      _isDnaVerified
-                          ? Icons.check_circle_rounded
-                          : Icons.radio_button_unchecked_rounded,
-                      key: ValueKey(_isDnaVerified),
-                      color: _isDnaVerified
-                          ? AppTheme.dnaVerifiedColor
-                          : Colors.grey,
-                      size: 22,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _isDnaVerified ? 'DNA Verified' : 'Non-DNA Verified',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                          color: _isDnaVerified
-                              ? AppTheme.dnaVerifiedColor
-                              : AppTheme.textSecondary,
-                        ),
-                      ),
-                      const Text(
-                        'Tap to toggle status',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: AppTheme.textLight,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Spacer(),
-                  // Color preview dot
-                  Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: _isDnaVerified
-                          ? AppTheme.dnaVerifiedColor
-                          : AppTheme.nonVerifiedColor,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // Submit button
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: _isAddingTree ? null : _addTree,
-              icon: _isAddingTree
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.save_rounded, size: 18),
-              label: Text(_isAddingTree ? 'Adding...' : 'Add Tree'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primary,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-          ),
+          const SizedBox(height: 14),
+          ...children,
         ],
       ),
     );
   }
 
-  Widget _buildCoordField({
+  // ── Text field ────────────────────────────────────────────────────────────
+
+  Widget _buildTextField({
     required TextEditingController controller,
     required String label,
-    required String hint,
+    String? hint,
+    TextInputType keyboardType = TextInputType.text,
+    String? Function(String?)? validator,
   }) {
-    return TextField(
+    return TextFormField(
       controller: controller,
-      keyboardType: const TextInputType.numberWithOptions(
-        signed: true,
-        decimal: true,
-      ),
+      keyboardType: keyboardType,
       style: const TextStyle(fontSize: 13),
+      validator: validator,
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
@@ -510,7 +736,13 @@ class _EditFarmScreenState extends State<EditFarmScreen> {
         hintStyle: const TextStyle(fontSize: 11, color: AppTheme.textLight),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        filled: true,
+        fillColor: AppTheme.background,
         border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: Colors.grey.shade300),
+        ),
+        enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
           borderSide: BorderSide(color: Colors.grey.shade300),
         ),
@@ -518,148 +750,10 @@ class _EditFarmScreenState extends State<EditFarmScreen> {
           borderRadius: BorderRadius.circular(10),
           borderSide: const BorderSide(color: AppTheme.primary, width: 1.5),
         ),
-      ),
-    );
-  }
-
-  // ── Tree list ────────────────────────────────────────────────────────────
-
-  Widget _buildTreeList() {
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      itemCount: _trees.length,
-      itemBuilder: (context, index) => _buildTreeTile(_trees[index], index),
-    );
-  }
-
-  Widget _buildTreeTile(CoffeeTree tree, int index) {
-    final isVerified = tree.isDnaVerified;
-    final color =
-        isVerified ? AppTheme.dnaVerifiedColor : AppTheme.nonVerifiedColor;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: ListTile(
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-
-        // Color-coded circle indicator
-        leading: Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            shape: BoxShape.circle,
-          ),
-          child: Center(
-            child: Container(
-              width: 14,
-              height: 14,
-              decoration: BoxDecoration(
-                color: color,
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Colors.red),
         ),
-
-        title: Text(
-          tree.treeId,
-          style: const TextStyle(
-            fontWeight: FontWeight.w600,
-            fontSize: 13,
-            color: AppTheme.textPrimary,
-          ),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 2),
-            Text(
-              '${tree.latitude.toStringAsFixed(8)},  ${tree.longitude.toStringAsFixed(8)}',
-              style: const TextStyle(
-                fontSize: 11,
-                color: AppTheme.textLight,
-                fontFamily: 'Courier',
-              ),
-            ),
-            const SizedBox(height: 4),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                tree.statusLabel,
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  color: color,
-                ),
-              ),
-            ),
-          ],
-        ),
-
-        // Delete button
-        trailing: GestureDetector(
-          onTap: () => _confirmDelete(tree),
-          child: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.red.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Icon(
-              Icons.delete_outline_rounded,
-              color: Colors.red,
-              size: 18,
-            ),
-          ),
-        ),
-
-        isThreeLine: true,
-      ),
-    );
-  }
-
-  // ── Empty state ──────────────────────────────────────────────────────────
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.forest_rounded,
-              size: 64, color: AppTheme.primary.withValues(alpha: 0.3)),
-          const SizedBox(height: 16),
-          const Text(
-            'No trees yet',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: AppTheme.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Tap "Add Tree" to insert the first tree.',
-            style: TextStyle(fontSize: 13, color: AppTheme.textLight),
-          ),
-        ],
       ),
     );
   }

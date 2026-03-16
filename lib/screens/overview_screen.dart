@@ -129,7 +129,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'DNA Verification Progress',
+                      '☕ DNA Verification Progress',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 16,
@@ -207,12 +207,12 @@ class _OverviewScreenState extends State<OverviewScreen> {
                     iconColor: AppTheme.accent,
                     subtitle: 'Across Batangas province',
                   ),
-                  const StatsCard(
-                    title: 'Total Field Area',
-                    value: 'N/A',
-                    icon: Icons.crop_square_rounded,
+                  StatsCard(
+                    title: 'Verification Rate',
+                    value: '${verificationRate.toStringAsFixed(1)}%',
+                    icon: Icons.verified_rounded,
                     iconColor: AppTheme.primaryLight,
-                    subtitle: 'Not in current schema',
+                    subtitle: 'DNA verified trees',
                   ),
                   StatsCard(
                     title: 'Liberica Trees',

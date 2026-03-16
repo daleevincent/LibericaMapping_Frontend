@@ -318,8 +318,9 @@ class _AddFarmScreenState extends State<AddFarmScreen> {
                             signed: true, decimal: true),
                         validator: (v) {
                           if (v == null || v.isEmpty) return 'Required';
-                          if (double.tryParse(v) == null)
+                          if (double.tryParse(v) == null) {
                             return 'Invalid number';
+                          }
                           return null;
                         },
                       ),
@@ -334,8 +335,9 @@ class _AddFarmScreenState extends State<AddFarmScreen> {
                             signed: true, decimal: true),
                         validator: (v) {
                           if (v == null || v.isEmpty) return 'Required';
-                          if (double.tryParse(v) == null)
+                          if (double.tryParse(v) == null) {
                             return 'Invalid number';
+                          }
                           return null;
                         },
                       ),

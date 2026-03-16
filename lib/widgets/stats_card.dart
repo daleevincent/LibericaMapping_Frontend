@@ -39,15 +39,16 @@ class StatsCard extends StatelessWidget {
             ),
           ],
         ),
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Container(
-                  padding: const EdgeInsets.all(10),
+                  padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
                     color: (iconColor ?? AppTheme.primary).withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(12),
@@ -55,38 +56,46 @@ class StatsCard extends StatelessWidget {
                   child: Icon(
                     icon,
                     color: iconColor ?? AppTheme.primary,
-                    size: 24,
+                    size: 20,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            Text(
-              value,
-              style: const TextStyle(
-                fontSize: 32,
-                fontWeight: FontWeight.w700,
-                color: AppTheme.textPrimary,
-                letterSpacing: -1,
+            const SizedBox(height: 10),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary,
+                  letterSpacing: -1,
+                ),
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 2),
             Text(
               title,
               style: const TextStyle(
-                fontSize: 14,
+                fontSize: 12,
                 fontWeight: FontWeight.w500,
                 color: AppTheme.textSecondary,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
             if (subtitle != null) ...[
-              const SizedBox(height: 4),
+              const SizedBox(height: 2),
               Text(
                 subtitle!,
                 style: const TextStyle(
-                  fontSize: 12,
+                  fontSize: 11,
                   color: AppTheme.textLight,
                 ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
             ],
           ],
