@@ -43,3 +43,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+
+# Build outputs — never commit
+build/
+android/app/build/
+android/.gradle/
+*.apk
+*.aab
+*.ipa
