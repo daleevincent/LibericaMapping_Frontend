@@ -254,16 +254,6 @@ Accessed via the lock icon on the main dashboard header.
 
 ---
 
-## Admin Credentials
-
-```
-Username : admin
-Password : liberica2024
-```
-
-> ⚠️ Replace with real authentication before production deployment.
-
----
 
 ## Notes
 
