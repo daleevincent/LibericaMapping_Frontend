@@ -14,6 +14,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../models/farm.dart';
 import '../models/prediction.dart';
@@ -50,6 +51,8 @@ class _PlantClassificationScreenState
   final _lngController = TextEditingController();
   bool _isClassifying = false;
   Prediction? _result;
+  String? _noFarmWarning;   // shown below result card after failed tree map nav
+  bool _isViewingMap = false;
 
   // ── GPS state ────────────────────────────────────────────────────────────
   bool _autoGps = true;          // toggle: auto-fill coords from device GPS
@@ -212,43 +215,48 @@ class _PlantClassificationScreenState
   // ── View on Tree Map ──────────────────────────────────────────────────────
 
   Future<void> _viewOnTreeMap(Prediction p) async {
+    // Only Liberica results navigate to tree map
+    if (!p.isLiberica) return;
+
     if (p.latitude == null || p.longitude == null) {
       _showSnack('No GPS coordinates in this prediction.', isError: true);
       return;
     }
 
-    final lat = p.latitude!;
-    final lng = p.longitude!;
+    setState(() {
+      _isViewingMap = true;
+      _noFarmWarning = null;
+    });
+
+    final lat    = p.latitude!;
+    final lng    = p.longitude!;
     final coords = LatLng(lat, lng);
 
-    // Find which farm this tree belongs to via mock data
-    final result = MockTreeData.findByCoordinates(lat, lng);
+    // Try exact match first, then nearest within 50 m
+    final result = MockTreeData.findByCoordinates(lat, lng) ??
+        MockTreeData.findNearest(lat, lng, thresholdMeters: 50);
 
     Farm? targetFarm;
-
-    if (result != null) {
-      // Match found — load the real farm from backend (or fallback to mock)
-      try {
-        final farms = await _farmService.getAllFarms();
-        targetFarm = farms.firstWhere(
-          (f) => f.id == result.tree.farmId,
-          orElse: () => _buildMockFarm(result),
-        );
-      } catch (_) {
-        targetFarm = _buildMockFarm(result);
+    try {
+      final farms = await _farmService.getAllFarms();
+      if (result != null) {
+        try {
+          targetFarm = farms.firstWhere((f) => f.id == result.tree.farmId);
+        } catch (_) {
+          targetFarm = _buildMockFarm(result);
+        }
       }
-    } else {
-      // No tree match — still navigate to the closest farm or first farm
-      try {
-        final farms = await _farmService.getAllFarms();
-        if (farms.isNotEmpty) targetFarm = farms.first;
-      } catch (_) {}
+      // No match within threshold → no navigation
+    } catch (_) {
+      if (result != null) targetFarm = _buildMockFarm(result);
     }
 
+    setState(() => _isViewingMap = false);
     if (!mounted) return;
 
     if (targetFarm == null) {
-      _showSnack('Could not find a matching farm.', isError: true);
+      setState(() => _noFarmWarning =
+          'No registered farm found near this GPS location.');
       return;
     }
 
@@ -318,6 +326,7 @@ class _PlantClassificationScreenState
       _lngController.clear();
       _plantPartMode = 'leaf';
       _gpsError = null;
+      _noFarmWarning = null;
       // _result is intentionally kept — only replaced by new classification
     });
   }
@@ -689,11 +698,6 @@ class _PlantClassificationScreenState
                         color: AppTheme.textPrimary),
                   ),
                   const SizedBox(height: 4),
-                  const Text(
-                    'Camera only — no gallery upload',
-                    style: TextStyle(
-                        fontSize: 11, color: AppTheme.textLight),
-                  ),
                 ],
               ),
             ),
@@ -1112,7 +1116,7 @@ class _PlantClassificationScreenState
                 ),
               ],
 
-              // Individual model predictions (mix mode)
+              // ── Individual model predictions (mix mode) ─────────────────
               if (p.individualPredictions.isNotEmpty) ...[
                 const Divider(height: 1),
                 Padding(
@@ -1184,30 +1188,152 @@ class _PlantClassificationScreenState
                   ),
                 ),
               ],
+
+              // ── GPS Mini Map ─────────────────────────────────────────────
+              if (p.hasCoordinates) ...[
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.location_on_rounded,
+                              size: 14, color: resultColor),
+                          const SizedBox(width: 6),
+                          const Text('Sample Location',
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.textPrimary)),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: SizedBox(
+                          height: 180,
+                          child: FlutterMap(
+                            options: MapOptions(
+                              initialCenter:
+                                  LatLng(p.latitude!, p.longitude!),
+                              initialZoom: 17,
+                              interactionOptions: const InteractionOptions(
+                                flags: InteractiveFlag.pinchZoom |
+                                    InteractiveFlag.drag,
+                              ),
+                            ),
+                            children: [
+                              TileLayer(
+                                urlTemplate:
+                                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                userAgentPackageName: 'com.liberica.map',
+                              ),
+                              MarkerLayer(
+                                markers: [
+                                  Marker(
+                                    point: LatLng(
+                                        p.latitude!, p.longitude!),
+                                    width: 44,
+                                    height: 44,
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: resultColor,
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                            color: Colors.white, width: 3),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: resultColor
+                                                .withValues(alpha: 0.4),
+                                            blurRadius: 8,
+                                            spreadRadius: 2,
+                                          ),
+                                        ],
+                                      ),
+                                      child: Icon(
+                                        isLiberica
+                                            ? Icons.eco_rounded
+                                            : Icons.block_rounded,
+                                        color: Colors.white,
+                                        size: 20,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // No farm warning
+                      if (_noFarmWarning != null) ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFF3E0),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                                color: const Color(0xFFFFCC80)),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.location_searching_rounded,
+                                  size: 14, color: Color(0xFFF57C00)),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _noFarmWarning!,
+                                  style: const TextStyle(
+                                      fontSize: 11,
+                                      color: AppTheme.textSecondary),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
             ],
           ),
         ),
 
-        // ── View on Tree Map button ─────────────────────────────────────────
+        // ── View on Tree Map / warnings ─────────────────────────────────────
         const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: () => _viewOnTreeMap(p),
-            icon: const Icon(Icons.map_rounded, size: 16),
-            label: const Text(
-              'View on Tree Map',
-              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-            ),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: AppTheme.primary,
-              side: const BorderSide(color: AppTheme.primary),
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
+
+        // Button — only for Liberica results
+        if (p.isLiberica)
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _isViewingMap ? null : () => _viewOnTreeMap(p),
+              icon: _isViewingMap
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: AppTheme.primary))
+                  : const Icon(Icons.map_rounded, size: 16),
+              label: Text(
+                _isViewingMap ? 'Searching...' : 'View on Tree Map',
+                style: const TextStyle(
+                    fontWeight: FontWeight.w600, fontSize: 13),
+              ),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppTheme.primary,
+                side: const BorderSide(color: AppTheme.primary),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
             ),
           ),
-        ),
       ],
     );
   }
